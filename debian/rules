@@ -1,0 +1,16 @@
+#!/usr/bin/make -f
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+export DEB_CFLAGS_MAINT_APPEND = -Wall
+
+%:
+	dh $@
+
+override_dh_auto_install:
+	dh_auto_install -- PREFIX=/usr
+
+override_dh_installchangelogs:
+	dh_installchangelogs CHANGELOG.md
+
+override_dh_strip:
+	dh_strip --no-automatic-dbgsym

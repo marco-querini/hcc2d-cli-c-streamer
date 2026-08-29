@@ -1,0 +1,6 @@
+hcc2d-streamer (0.9.0-1) unstable; urgency=medium
+
+  * Initial Debian packaging release of the single-file C Streamer.
+  * Support QR, HCC2D4, and HCC2D8 symbol streams.
+
+ -- Marco Querini <info@hcc2d.com>  Sun, 30 Aug 2026 12:00:00 +0200

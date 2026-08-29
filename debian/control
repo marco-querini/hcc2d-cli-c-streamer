@@ -1,0 +1,19 @@
+Source: hcc2d-streamer
+Section: graphics
+Priority: optional
+Maintainer: Marco Querini <info@hcc2d.com>
+Build-Depends: debhelper (>= 12), pkg-config, libsdl2-dev, zlib1g-dev
+Standards-Version: 4.7.0
+Homepage: https://hcc2d.com/en/
+Rules-Requires-Root: no
+
+Package: hcc2d-streamer
+Architecture: any
+Depends: ${misc:Depends}, ${shlibs:Depends}
+Description: stream files through QR and HCC2D colour codes
+ Single-file C command-line application that transfers files by displaying
+ repeating sequences of standard QR, four-colour HCC2D, or eight-colour
+ HCC2D symbols in an SDL2 window.
+ .
+ The receiver can recover a file after capturing a sufficient subset of the
+ Reed-Solomon-protected symbols with the HCC2D Decoder companion app.

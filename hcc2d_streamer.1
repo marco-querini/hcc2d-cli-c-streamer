@@ -1,0 +1,100 @@
+.TH HCC2D_STREAMER 1 "August 2026" "HCC2D CLI C Streamer 0.9.0" "User Commands"
+.SH NAME
+hcc2d_streamer \- transfer files through streams of QR or HCC2D symbols
+.SH SYNOPSIS
+.B hcc2d_streamer
+[\fIoptions\fR]
+\fIFILE\fR
+.SH DESCRIPTION
+\fBhcc2d_streamer\fR reads a file, optionally compresses it, splits it into
+dynamic Reed-Solomon erasure groups, and displays the resulting shards as a
+repeating sequence of QR, HCC2D4, or HCC2D8 symbols in an SDL2 window.
+The HCC2D Decoder companion app captures the sequence and reconstructs the
+original file.
+.PP
+Symbols are generated in memory and are not written to temporary image files.
+.PP
+This public CLI supports only QR, HCC2D4, and HCC2D8 with symbol versions 1 to
+40. Experimental HCC2D16 and experimental version 45 are not included.
+.SH OPTIONS
+.TP
+\fB\-\-mode\fR \fBqr\fR|\fBhcc2d4\fR|\fBhcc2d8\fR
+Select the symbol family. The default is \fBhcc2d8\fR.
+.TP
+\fB\-\-colors\fR \fB2\fR|\fB4\fR|\fB8\fR
+Select the same symbol family by palette size: 2 means QR, 4 means HCC2D4,
+and 8 means HCC2D8. This option is mutually exclusive with \fB\-\-mode\fR.
+.TP
+\fB\-\-ec-level\fR \fBL\fR|\fBM\fR|\fBQ\fR|\fBH\fR
+Set the error-correction level inside each symbol. The default is \fBM\fR.
+.TP
+\fB\-\-version\fR \fIN\fR
+Set the fixed symbol version from 1 to 40. The default is 30.
+.TP
+\fB\-\-fps\fR \fIN\fR
+Set the display rate from 10 to 20 symbols per second. The default is 10.
+.TP
+\fB\-\-display\fR \fIN\fR
+Select the SDL display index used for window placement and size calculation.
+The default is 0.
+.TP
+\fB\-\-quiet-zone\fR \fIN\fR
+Set the quiet zone from 0 to 16 modules. The default is 4.
+.TP
+\fB\-\-no-titlebar\fR
+Hide window decorations so that more display height is available to the
+symbol.
+.TP
+\fB\-\-palette-rgb\fR \fILIST\fR
+Set a complete custom HCC2D4 or HCC2D8 palette as a quoted list in the form
+\fIR,G,B;R,G,B;...\fR. Index 0 must be black and the last index white.
+This option is not valid with QR mode.
+.TP
+\fB\-\-k-max\fR \fIN\fR
+Set the maximum number of data shards in one erasure group, from 1 to 254.
+The default is 150.
+.TP
+\fB\-\-parity-num\fR \fIN\fR
+Set the parity-ratio numerator. The default is 70.
+.TP
+\fB\-\-parity-den\fR \fIN\fR
+Set the positive parity-ratio denominator. The default is 100.
+The program rejects combinations for which data plus parity would exceed 255
+shards in one group.
+.TP
+\fB\-\-help\fR
+Show the built-in help text and exit.
+.SH EXAMPLES
+.TP
+Stream a file with the default HCC2D8 profile:
+.B hcc2d_streamer document.pdf
+.TP
+Stream HCC2D8 version 40 at 15 symbols per second:
+.B hcc2d_streamer \-\-mode hcc2d8 \-\-ec-level L \-\-version 40 \-\-fps 15 document.pdf
+.TP
+Stream HCC2D4:
+.B hcc2d_streamer \-\-mode hcc2d4 \-\-version 30 document.pdf
+.TP
+Stream standard QR Codes:
+.B hcc2d_streamer \-\-mode qr \-\-version 20 document.pdf
+.SH EXIT STATUS
+.B hcc2d_streamer
+returns 0 after the window is closed normally and a non-zero status on errors.
+.SH FILES
+.TP
+.I /usr/bin/hcc2d_streamer
+Installed command-line Streamer.
+.SH SECURITY
+The Streamer performs a local optical transfer and does not upload the input
+file. Anyone able to observe and decode enough displayed symbols may recover
+the file.
+.SH AUTHOR
+Marco Querini
+.SH LICENSE
+Apache License 2.0.
+.SH SEE ALSO
+.UR https://hcc2d.com/en/
+.UE
+.br
+.UR https://hcc2d.com/hcc2d_specification_v0.9.0.pdf
+.UE

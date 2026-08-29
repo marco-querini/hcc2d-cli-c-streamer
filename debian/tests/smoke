@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+
+hcc2d_streamer --help >/dev/null
+
+if hcc2d_streamer --mode hcc2d16 --version 40 /dev/null >/dev/null 2>&1; then
+    echo "Experimental HCC2D16 unexpectedly succeeded" >&2
+    exit 1
+fi
+
+if hcc2d_streamer --mode hcc2d8 --version 45 /dev/null >/dev/null 2>&1; then
+    echo "Experimental version 45 unexpectedly succeeded" >&2
+    exit 1
+fi

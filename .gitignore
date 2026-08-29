@@ -1,0 +1,44 @@
+# Local build artifacts
+hcc2d_streamer
+*.o
+release/
+*.deb
+*.build
+*.buildinfo
+*.changes
+*.dsc
+*.tar.*
+
+# Debian packaging work files
+debian/.debhelper/
+debian/debhelper-build-stamp
+debian/files
+debian/hcc2d-streamer/
+debian/*.debhelper.log
+debian/*.substvars
+debian/tmp/
+
+# Temporary local output
+dist/
+apt-repo/tmp/
+
+# Retained locally; protocol documentation is not published yet
+PROTOCOL.md
+
+# Generated APT repository content
+apt-repo/public/*
+
+# A public archive key may be published deliberately.
+!apt-repo/public/hcc2d-archive-keyring.gpg
+
+# Private signing material and local GnuPG state
+.secrets/
+*.private-key
+*.secret-key
+private-keys-v1.d/
+openpgp-revocs.d/
+
+# Editor and operating-system files
+.DS_Store
+*.swp
+*~
