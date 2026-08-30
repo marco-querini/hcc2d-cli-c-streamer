@@ -35,7 +35,7 @@ HCC2DST v2 streams require HCC2D Decoder version 1.2.4 or later.
 
 ## Scope
 
-This public distribution supports only the non-experimental symbol families:
+This public distribution supports the following symbol families and profiles:
 
 - standard black-and-white QR Codes;
 - HCC2D4 with four colors and 2 bits per data module;
@@ -47,9 +47,6 @@ This public distribution supports only the non-experimental symbol families:
 - dynamic Reed-Solomon erasure groups;
 - configurable frame rate, display, quiet zone, and redundancy;
 - optional complete custom RGB palettes for HCC2D4 and HCC2D8.
-
-Experimental HCC2D16 and experimental symbol version 45 are intentionally not
-included and cannot be selected through this CLI.
 
 ## Build from source
 
@@ -171,9 +168,10 @@ Theoretical symbol-layer rate: **~0.08 Mbps**.
 
 These are theoretical symbol-layer rates: the data-codeword capacity after
 accounting for the internal QR/HCC2D Reed-Solomon overhead, multiplied by the
-selected display rate. They do not subtract application framing or apply the
-external erasure-code parity ratio, and therefore are not estimates of useful
-file-transfer throughput.
+selected display rate. Application framing and external erasure-code parity are
+not part of this symbol-layer calculation: parity supports recovery, and the
+receiver can complete reconstruction as soon as the minimum required shards
+are available.
 
 ## Main options
 
@@ -222,7 +220,7 @@ Streamer does not require an account, network connection, or credentials. It
 does not upload the selected file.
 
 Anyone able to see and decode enough displayed symbols may reconstruct the
-file. Use the Streamer only where the screen is appropriately protected.
+file.
 
 ## License
 
