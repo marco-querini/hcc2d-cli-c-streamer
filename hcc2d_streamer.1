@@ -12,6 +12,11 @@ repeating sequence of QR, HCC2D4, or HCC2D8 symbols in an SDL2 window.
 The HCC2D Decoder companion app captures the sequence and reconstructs the
 original file.
 .PP
+HCC2DST v2 streams require HCC2D Decoder version 1.2.4 or later.
+.PP
+The maximum input-file size is 2 MiB (2,097,152 bytes), matching the current
+HCC2D Decoder limit.
+.PP
 Symbols are generated in memory and are not written to temporary image files.
 .PP
 This public CLI supports only QR, HCC2D4, and HCC2D8 with symbol versions 1 to
@@ -21,10 +26,6 @@ This public CLI supports only QR, HCC2D4, and HCC2D8 with symbol versions 1 to
 \fB\-\-mode\fR \fBqr\fR|\fBhcc2d4\fR|\fBhcc2d8\fR
 Select the symbol family. The default is \fBhcc2d8\fR.
 .TP
-\fB\-\-colors\fR \fB2\fR|\fB4\fR|\fB8\fR
-Select the same symbol family by palette size: 2 means QR, 4 means HCC2D4,
-and 8 means HCC2D8. This option is mutually exclusive with \fB\-\-mode\fR.
-.TP
 \fB\-\-ec-level\fR \fBL\fR|\fBM\fR|\fBQ\fR|\fBH\fR
 Set the error-correction level inside each symbol. The default is \fBM\fR.
 .TP
@@ -32,11 +33,14 @@ Set the error-correction level inside each symbol. The default is \fBM\fR.
 Set the fixed symbol version from 1 to 40. The default is 30.
 .TP
 \fB\-\-fps\fR \fIN\fR
-Set the display rate from 10 to 20 symbols per second. The default is 10.
+Set the display rate to 10, 12, 15, or 20 symbols per second. The default is
+10. On a 60 Hz display, these rates show each symbol for exactly 6, 5, 4, or
+3 refresh cycles, respectively.
 .TP
 \fB\-\-display\fR \fIN\fR
 Select the SDL display index used for window placement and size calculation.
-The default is 0.
+The index must be non-negative; the default is 0. The program reports the
+number of available displays if the selected index does not exist.
 .TP
 \fB\-\-quiet-zone\fR \fIN\fR
 Set the quiet zone from 0 to 16 modules. The default is 4.
@@ -46,21 +50,21 @@ Hide window decorations so that more display height is available to the
 symbol.
 .TP
 \fB\-\-palette-rgb\fR \fILIST\fR
-Set a complete custom HCC2D4 or HCC2D8 palette as a quoted list in the form
-\fIR,G,B;R,G,B;...\fR. Index 0 must be black and the last index white.
+Set a complete custom HCC2D4 or HCC2D8 palette as a quoted list of
+semicolon-separated \fIR,G,B\fR triplets. Index 0 must be black and the last
+index white.
 This option is not valid with QR mode.
 .TP
-\fB\-\-k-max\fR \fIN\fR
-Set the maximum number of data shards in one erasure group, from 1 to 254.
+\fB\-\-max-data-shards\fR \fIN\fR
+Set the maximum number of data shards in one erasure group, from 1 to 255.
 The default is 150.
 .TP
-\fB\-\-parity-num\fR \fIN\fR
-Set the parity-ratio numerator. The default is 70.
-.TP
-\fB\-\-parity-den\fR \fIN\fR
-Set the positive parity-ratio denominator. The default is 100.
-The program rejects combinations for which data plus parity would exceed 255
-shards in one group.
+\fB\-\-parity-ratio\fR \fIR\fR
+Set the ratio of parity shards to data shards, from 0 to 1. The default is
+0.70, and up to six decimal places are accepted. For example, 0.70 adds
+approximately 70 parity shards per 100 data shards.
+If the requested maximum data-shard count would make a group exceed 255 total
+shards, the program automatically lowers the effective data-shard limit.
 .TP
 \fB\-\-help\fR
 Show the built-in help text and exit.
@@ -68,15 +72,29 @@ Show the built-in help text and exit.
 .TP
 Stream a file with the default HCC2D8 profile:
 .B hcc2d_streamer document.pdf
+.br
+Theoretical symbol-layer rate: approximately 0.33 Mbps.
 .TP
 Stream HCC2D8 version 40 at 15 symbols per second:
 .B hcc2d_streamer \-\-mode hcc2d8 \-\-ec-level L \-\-version 40 \-\-fps 15 document.pdf
+.br
+Theoretical symbol-layer rate: approximately 1.06 Mbps.
 .TP
 Stream HCC2D4:
-.B hcc2d_streamer \-\-mode hcc2d4 \-\-version 30 document.pdf
+.B hcc2d_streamer \-\-mode hcc2d4 \-\-ec-level M \-\-version 30 document.pdf
+.br
+Theoretical symbol-layer rate: approximately 0.22 Mbps.
 .TP
 Stream standard QR Codes:
-.B hcc2d_streamer \-\-mode qr \-\-version 20 document.pdf
+.B hcc2d_streamer \-\-mode qr \-\-ec-level L \-\-version 20 document.pdf
+.br
+Theoretical symbol-layer rate: approximately 0.07 Mbps.
+.PP
+These are theoretical symbol-layer rates: the data-codeword capacity after
+accounting for the internal QR/HCC2D Reed-Solomon overhead, multiplied by the
+selected display rate. They do not subtract application framing or apply the
+external erasure-code parity ratio, and therefore are not estimates of useful
+file-transfer throughput.
 .SH EXIT STATUS
 .B hcc2d_streamer
 returns 0 after the window is closed normally and a non-zero status on errors.

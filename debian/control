@@ -10,10 +10,11 @@ Rules-Requires-Root: no
 Package: hcc2d-streamer
 Architecture: any
 Depends: ${misc:Depends}, ${shlibs:Depends}
-Description: stream files through QR and HCC2D colour codes
+Description: stream files through QR and HCC2D symbols
  Single-file C command-line application that transfers files by displaying
- repeating sequences of standard QR, four-colour HCC2D, or eight-colour
+ repeating sequences of standard QR, four-color HCC2D, or eight-color
  HCC2D symbols in an SDL2 window.
  .
  The receiver can recover a file after capturing a sufficient subset of the
  Reed-Solomon-protected symbols with the HCC2D Decoder companion app.
+ HCC2DST v2 streams require HCC2D Decoder version 1.2.4 or later.

@@ -20,7 +20,8 @@ The default configuration includes:
 - Ubuntu `noble`.
 
 Edit `apt-repo/repo.conf` or override its environment variables to change the
-matrix.
+distribution and architecture matrix. One repository component is supported;
+it is `main` by default.
 
 ## Signing key
 
@@ -48,8 +49,9 @@ private-key files into this repository.
 
 ## Prerequisites
 
-- `gpg`;
+- `gpg` and `gpgv`;
 - `apt-ftparchive` from `apt-utils`;
+- `dpkg-deb`, `gzip`, and `sha256sum`;
 - a `.deb` built with `dpkg-buildpackage`.
 
 ## Build the package
@@ -84,6 +86,12 @@ Validate the generated repository:
 ```bash
 apt-repo/scripts/check.sh --distribution noble
 ```
+
+The publishing script validates every package, prepares package indexes and
+signatures in a staging directory, and then installs the completed metadata.
+The check script verifies the repository fields, compressed indexes, package
+sizes and SHA-256 hashes, and both APT signatures when signed metadata is
+present.
 
 Generated pools, distribution metadata, and temporary files are ignored by
 Git. They must be deployed separately to the actual HTTPS package host.

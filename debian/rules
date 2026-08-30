@@ -1,13 +1,13 @@
 #!/usr/bin/make -f
 
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
-export DEB_CFLAGS_MAINT_APPEND = -Wall
+export DEB_CFLAGS_MAINT_APPEND = -std=c11 -Wall -Wextra -Wpedantic
 
 %:
 	dh $@
 
 override_dh_auto_install:
-	dh_auto_install -- PREFIX=/usr
+	dh_auto_install -- PREFIX=/usr INSTALL=install
 
 override_dh_installchangelogs:
 	dh_installchangelogs CHANGELOG.md

@@ -1,5 +1,5 @@
 CC ?= cc
-CFLAGS ?= -O2 -Wall
+CFLAGS ?= -std=c11 -O2 -Wall -Wextra -Wpedantic
 CPPFLAGS ?= $(shell pkg-config --cflags sdl2)
 LDFLAGS ?=
 LDLIBS ?= $(shell pkg-config --libs sdl2) -lz -lm
@@ -13,7 +13,32 @@ TARGET := hcc2d_streamer
 SRC := single_file_c_hcc2d_streamer_v0.9.0.c
 MANPAGE := hcc2d_streamer.1
 TEST := test_single_file_streamer.sh
-CHECKSUM_FILES := $(SRC) $(TEST) LICENSE README.md CHANGELOG.md Makefile $(MANPAGE)
+CHECKSUM_FILES := \
+	.gitignore \
+	CHANGELOG.md \
+	LICENSE \
+	Makefile \
+	README.md \
+	apt-repo/README.md \
+	apt-repo/public/hcc2d-archive-keyring.gpg \
+	apt-repo/repo.conf \
+	apt-repo/scripts/check.sh \
+	apt-repo/scripts/export-public-key.sh \
+	apt-repo/scripts/publish.sh \
+	debian/changelog \
+	debian/compat \
+	debian/control \
+	debian/copyright \
+	debian/docs \
+	debian/hcc2d-streamer.lintian-overrides \
+	debian/manpages \
+	debian/rules \
+	debian/source/format \
+	debian/tests/control \
+	debian/tests/smoke \
+	$(MANPAGE) \
+	$(SRC) \
+	$(TEST)
 
 .PHONY: all clean checksum test install uninstall
 

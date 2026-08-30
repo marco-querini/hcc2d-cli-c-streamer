@@ -9,15 +9,17 @@ displaying a repeating stream of QR, HCC2D4, or HCC2D8 symbols in an SDL2
 window. The HCC2D Decoder companion app captures the symbols and reconstructs
 the original file.
 
+HCC2DST v2 streams require HCC2D Decoder version 1.2.4 or later.
+
 ## Official links
 
-- HCC2D website: `https://hcc2d.com/en/`
-- HCC2D specification PDF: `https://hcc2d.com/hcc2d_specification_v0.9.0.pdf`
-- HCC2D API: `https://hcc2d.com/en/api`
+- [HCC2D website](https://hcc2d.com/en/)
+- [HCC2D specification PDF](https://hcc2d.com/hcc2d_specification_v0.9.0.pdf)
+- [HCC2D API](https://hcc2d.com/en/api)
 - HCC2D Decoder:
-  - Google Play: `https://play.google.com/store/apps/details?id=com.hcc2d.decoder`
-  - Huawei AppGallery: `https://appgallery.cloud.huawei.com/marketshare/app/C117478101`
-  - App Store for iPhone: `https://apps.apple.com/app/id6762202762`
+  - [Google Play](https://play.google.com/store/apps/details?id=com.hcc2d.decoder)
+  - [Huawei AppGallery](https://appgallery.cloud.huawei.com/marketshare/app/C117478101)
+  - [App Store for iPhone](https://apps.apple.com/app/id6762202762)
 
 ## Contents
 
@@ -36,10 +38,12 @@ the original file.
 This public distribution supports only the non-experimental symbol families:
 
 - standard black-and-white QR Codes;
-- HCC2D4 with four colours and 2 bits per data module;
-- HCC2D8 with eight colours and 3 bits per data module;
+- HCC2D4 with four colors and 2 bits per data module;
+- HCC2D8 with eight colors and 3 bits per data module;
 - EC levels `L`, `M`, `Q`, and `H`;
 - symbol versions `1..40`;
+- input files up to 2 MiB (2,097,152 bytes), matching the current Decoder limit;
+- HCC2DST v2 output;
 - dynamic Reed-Solomon erasure groups;
 - configurable frame rate, display, quiet zone, and redundancy;
 - optional complete custom RGB palettes for HCC2D4 and HCC2D8.
@@ -65,7 +69,7 @@ make
 Equivalent direct command:
 
 ```bash
-cc -O2 -Wall $(pkg-config --cflags sdl2) \
+cc -std=c11 -O2 -Wall -Wextra -Wpedantic $(pkg-config --cflags sdl2) \
   single_file_c_hcc2d_streamer_v0.9.0.c \
   $(pkg-config --libs sdl2) -lz -lm -o hcc2d_streamer
 ```
@@ -132,11 +136,15 @@ Use the default HCC2D8 profile:
 ./hcc2d_streamer document.pdf
 ```
 
+Theoretical symbol-layer rate: **~0.33 Mbps**.
+
 Stream HCC2D8 version 40 at 15 symbols per second with EC level L:
 
 ```bash
 ./hcc2d_streamer --mode hcc2d8 --ec-level L --version 40 --fps 15 document.pdf
 ```
+
+Theoretical symbol-layer rate: **~1.06 Mbps**.
 
 Stream HCC2D4:
 
@@ -144,28 +152,38 @@ Stream HCC2D4:
 ./hcc2d_streamer --mode hcc2d4 --ec-level M --version 30 document.pdf
 ```
 
+Theoretical symbol-layer rate: **~0.22 Mbps**.
+
 Stream standard QR Codes:
 
 ```bash
 ./hcc2d_streamer --mode qr --ec-level L --version 20 document.pdf
 ```
 
-The equivalent palette-size syntax is `--colors 2`, `--colors 4`, or
-`--colors 8`. Do not combine `--colors` and `--mode`.
+Theoretical symbol-layer rate: **~0.07 Mbps**.
+
+These are theoretical symbol-layer rates: the data-codeword capacity after
+accounting for the internal QR/HCC2D Reed-Solomon overhead, multiplied by the
+selected display rate. They do not subtract application framing or apply the
+external erasure-code parity ratio, and therefore are not estimates of useful
+file-transfer throughput.
 
 ## Main options
 
 | Option | Values | Default | Meaning |
 |---|---:|---:|---|
 | `--mode` | `qr`, `hcc2d4`, `hcc2d8` | `hcc2d8` | Symbol family |
-| `--colors` | `2`, `4`, `8` | `8` | Palette-size form of `--mode` |
 | `--ec-level` | `L`, `M`, `Q`, `H` | `M` | Error correction inside each symbol |
 | `--version` | `1..40` | `30` | Fixed symbol version |
-| `--fps` | `10..20` | `10` | Displayed symbols per second |
-| `--display` | non-negative index | `0` | SDL display used for window placement |
+| `--fps` | `10`, `12`, `15`, `20` | `10` | Displayed symbols per second |
+| `--display` | non-negative integer | `0` | SDL display used for window placement |
 | `--quiet-zone` | `0..16` | `4` | Quiet-zone width in modules |
 | `--no-titlebar` | flag | off | Hide window decorations |
 | `--palette-rgb` | RGB list | built in | Complete HCC2D4/8 palette |
+
+The available display rates divide a commonly used 60 Hz refresh rate into
+an integer number of refresh cycles per symbol: 6, 5, 4, or 3 cycles at 10,
+12, 15, or 20 symbols per second, respectively.
 
 The shard payload size is derived automatically from the selected symbol
 family, EC level, and version. It is the largest payload that fits exactly in
@@ -175,18 +193,20 @@ one symbol after the HCC2DST and HCC2DF headers.
 
 | Option | Range | Default | Meaning |
 |---|---:|---:|---|
-| `--k-max` | `1..254` | `150` | Maximum data shards in one erasure group |
-| `--parity-num` | non-negative integer | `70` | Parity-ratio numerator |
-| `--parity-den` | positive integer | `100` | Parity-ratio denominator |
+| `--max-data-shards` | `1..255` | `150` | Maximum data shards in one erasure group |
+| `--parity-ratio` | `0..1` | `0.70` | Parity shards relative to data shards |
 
-For each group, the Streamer computes approximately
-`round(k * parity-num / parity-den)` parity shards. The default parity is 70%
-of the data-shard count. A full default group contains 150 data and 105 parity
-shards, so as many as 105 of 255 transmitted symbols may be lost. The program
-rejects settings that would exceed the limit `k + m <= 255`.
+For each group, the Streamer computes `round(k * parity-ratio)` parity shards.
+The ratio accepts up to six decimal places. The default value of `0.70` adds
+approximately 70 parity shards per 100 data shards. A full default group
+contains 150 data and 105 parity shards, so as many as 105 of 255 transmitted
+symbols may be lost. If the requested maximum data-shard count would make a
+group exceed `k + m <= 255`, the Streamer automatically lowers the effective
+group limit. Consequently, every `--parity-ratio` value from 0 to 1 remains
+usable.
 
 The Streamer writes no temporary symbol images to disk. Symbols are generated
-in memory and uploaded directly to SDL textures.
+in memory and rendered through a reusable SDL texture.
 
 ## Security and privacy
 

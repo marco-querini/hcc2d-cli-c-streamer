@@ -1,16 +1,16 @@
 /*
- * hcc2d_streamer.c
+ * single_file_c_hcc2d_streamer_v0.9.0.c
  * HCC2D Streamer — Reed-Solomon sharded HCC2D symbol streamer
  * Copyright Marco Querini
  * SPDX-License-Identifier: Apache-2.0
  * Version 0.9.0
- * Date 2026-05-31
+ * Date 2026-08-30
  *
- * Build:  cc -O2 -Wall $(pkg-config --cflags sdl2) hcc2d_streamer.c \
+ * Build:  cc -std=c11 -O2 -Wall -Wextra -Wpedantic \
+ *             $(pkg-config --cflags sdl2) single_file_c_hcc2d_streamer_v0.9.0.c \
  *             $(pkg-config --libs sdl2) -lz -lm
- * Usage:  ./hcc2d_streamer [--colors 2|4|8] [--ec-level L|M|Q|H] [--version N]
- *                      [--fps N] myfile.pdf
- *         (or --mode qr|hcc2d4|hcc2d8 instead of --colors; not both)
+ * Usage:  ./hcc2d_streamer [--mode qr|hcc2d4|hcc2d8]
+ *                      [--ec-level L|M|Q|H] [--version N] [--fps N] myfile.pdf
  *
  * Specification compliance:
  *   Intended to conform to the HCC2D Code Specification version 0.9.0.
@@ -19,18 +19,19 @@
  * Description:
  *   Reads a file, splits it into Reed-Solomon shards with dynamic k/m groups,
  *   encodes each shard as an HCC2D symbol or a standard QR Code at a fixed
- *   version (shard size is derived to be the byte-perfect max payload for
+ *   version (the shard size is derived from the maximum available payload for
  *   the chosen mode/EC level/version), then streams all symbols in an SDL2
  *   window in an infinite loop. Press ESC or close the window to exit.
  *
  * Companion app:
  *   To receive this stream and recover the file, point a smartphone camera
- *   at the window using the HCC2D Decoder app:
+ *   at the window. HCC2DST v2 output requires HCC2D Decoder version 1.2.4
+ *   or later:
  *     iOS (Apple App Store):       https://apps.apple.com/us/app/hcc2d-decoder/id6762202762
  *     Android (Google Play):       https://play.google.com/store/apps/details?id=com.hcc2d.decoder
  *     Android (Huawei AppGallery): https://appgallery.cloud.huawei.com/marketshare/app/C117478101
  *
- * Terms of service / no-warranty notice:
+ * Warranty disclaimer:
  *   This file is provided "as is", without warranties or conditions of any
  *   kind, express or implied, including but not limited to merchantability,
  *   fitness for a particular purpose, and noninfringement. Use of this file
@@ -48,26 +49,30 @@
  *   Full license text: https://www.apache.org/licenses/LICENSE-2.0
  */
 
+#define _POSIX_C_SOURCE 200809L
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stddef.h>
 #include <time.h>
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
+#include <sys/types.h>
 #include <getopt.h>
 #include <zlib.h>
 #include <SDL2/SDL.h>
 
 /* =========================================================================
  * Memory helpers
- * malloc/calloc wrappers that abort with a clear message on allocation
- * failure. Most call sites in this file do not (and cannot reasonably)
- * recover from OOM mid-encode, so failing fast beats a NULL-deref crash.
+ * malloc/calloc wrappers that report the requested size and terminate on an
+ * allocation failure. Encoding cannot continue safely with partial state.
  * ========================================================================= */
 
 static void *xmalloc(size_t size) {
+    if (size == 0) size = 1;
     void *p = malloc(size);
     if (!p) {
         fprintf(stderr, "Error: out of memory (requested %zu bytes)\n", size);
@@ -77,6 +82,15 @@ static void *xmalloc(size_t size) {
 }
 
 static void *xcalloc(size_t nmemb, size_t size) {
+    if (nmemb != 0 && size > SIZE_MAX / nmemb) {
+        fprintf(stderr, "Error: allocation size overflow (%zu x %zu bytes)\n",
+                nmemb, size);
+        exit(1);
+    }
+    if (nmemb == 0 || size == 0) {
+        nmemb = 1;
+        size = 1;
+    }
     void *p = calloc(nmemb, size);
     if (!p) {
         fprintf(stderr, "Error: out of memory (requested %zu x %zu bytes)\n",
@@ -88,8 +102,7 @@ static void *xcalloc(size_t nmemb, size_t size) {
 
 /* Parse a base-10 integer strictly within [min_value, max_value]: rejects
  * empty strings, trailing garbage ("12x"), and out-of-range values, instead
- * of atoi's silent fallback to 0 for any unparseable input. Mirrors
- * parse_int_option() in the sibling hcc2d_encoder CLI. */
+ * of atoi's silent fallback to 0 for unparseable input. */
 static int parse_int_option(const char *name, const char *value,
                              int min_value, int max_value, int *out) {
     char *end = NULL;
@@ -109,21 +122,72 @@ static int parse_int_option(const char *name, const char *value,
  * Constants
  * ========================================================================= */
 
-/* Defaults for the three group-sizing constants below; each is now an
- * independently overridable CLI parameter (--k-max, --parity-num,
- * --parity-den) rather than a fixed value -- see the k_max/parity_num/
- * parity_den locals in main(). None of these three are required or
- * derived by the HCC2DST protocol itself; the only figure the protocol
- * actually imposes is rs_k+rs_m <= N_LIMIT. With the defaults, k=150
- * computes to m=105 and n=k+m lands exactly on N_LIMIT. */
-#define K_MAX_DEFAULT            150
-#define PARITY_NUM_DEFAULT        70
-#define PARITY_DEN_DEFAULT       100
+/* Default outer erasure-code group: 150 data shards plus parity equal to
+ * 70% of the data-shard count. HCC2DST limits k + m to 255. */
+#define MAX_DATA_SHARDS_DEFAULT  150
+#define PARITY_RATIO_SCALE   1000000u
+#define PARITY_RATIO_DEFAULT  700000u
 #define N_LIMIT          255
-/* shard data bytes per symbol; always overwritten in main() from
- * --colors/--ec-level/--version before first use, no meaningful default */
-static int g_shard_data_bytes = 0;
+#define MAX_INPUT_FILE_BYTES (2u * 1024u * 1024u)
+/* Shard data bytes per symbol. main() derives this value from the selected
+ * mode, error-correction level, and version before its first use. */
+static size_t g_shard_data_bytes = 0;
 #define MAX_SYMBOLS     10000
+
+/* Parse a decimal ratio from 0 to 1 into millionths. Fixed-point arithmetic
+ * keeps shard-count rounding independent of floating-point behavior. */
+static int parse_parity_ratio(const char *value, uint32_t *out) {
+    const unsigned char *p = (const unsigned char *)value;
+    uint32_t whole = 0;
+    uint32_t fraction = 0;
+    int digits = 0;
+
+    if (!value || *value == '\0') goto invalid;
+    if (*p == '0' || *p == '1') {
+        whole = (uint32_t)(*p - '0');
+        p++;
+    } else if (*p != '.') {
+        goto invalid;
+    }
+
+    if (*p == '.') {
+        p++;
+        if (!isdigit(*p)) goto invalid;
+        while (isdigit(*p)) {
+            if (digits == 6) goto invalid;
+            fraction = fraction * 10u + (uint32_t)(*p - '0');
+            digits++;
+            p++;
+        }
+    }
+    if (*p != '\0' || (whole == 1u && fraction != 0u)) goto invalid;
+
+    while (digits < 6) {
+        fraction *= 10u;
+        digits++;
+    }
+    *out = whole == 1u ? PARITY_RATIO_SCALE : fraction;
+    return 0;
+
+invalid:
+    fprintf(stderr,
+            "Error: --parity-ratio must be a decimal from 0 to 1 "
+            "with at most 6 fractional digits\n");
+    return -1;
+}
+
+static uint32_t parity_shard_count(uint32_t k, uint32_t ratio) {
+    uint64_t scaled = (uint64_t)k * (uint64_t)ratio;
+    return (uint32_t)((scaled + PARITY_RATIO_SCALE / 2u) /
+                      PARITY_RATIO_SCALE);
+}
+
+static uint32_t effective_data_shard_limit(uint32_t requested,
+                                           uint32_t parity_ratio) {
+    while (requested + parity_shard_count(requested, parity_ratio) > N_LIMIT)
+        requested--;
+    return requested;
+}
 
 typedef struct {
     uint32_t k;           /* data shards in this group */
@@ -161,14 +225,12 @@ static int ec_level_index(char c) {
 
 typedef struct { uint8_t r, g, b; } RGB;
 
-/* hcc2d4 model1 palette (screen), spec §5. Indices 1 and 2 are the HCC2D4
- * red and cyan, not the HCC2D8 dark-red/light-cyan pair they were
- * previously copied from. */
+/* HCC2D4 Model 1 screen palette (specification section 5). */
 static const RGB PALETTE_4_MODEL1[4] = {
     {0,0,0},{220,0,0},{0,200,220},{255,255,255}
 };
 
-/* hcc2d8 model1 palette (screen) */
+/* HCC2D8 Model 1 screen palette (specification section 5). */
 static const RGB PALETTE_8_MODEL1[8] = {
     {0,0,0},{200,0,0},{0,130,0},{0,60,180},
     {0,215,235},{255,220,50},{255,130,230},{255,255,255}
@@ -178,35 +240,30 @@ static const RGB PALETTE_8_MODEL1[8] = {
  * list, for example "0,0,0;220,0,0;0,200,220;255,255,255". */
 static int parse_palette_rgb(const char *text, int palette_size, RGB out[8])
 {
-    char *copy = (char *)xmalloc(strlen(text) + 1);
-    strcpy(copy, text);
-    char *save = NULL;
-    char *token = strtok_r(copy, ",; \t\r\n", &save);
-    int component = 0;
-    while (token) {
-        if (component >= palette_size * 3) {
-            fprintf(stderr, "Error: --palette-rgb has more than %d RGB components\n",
-                    palette_size * 3);
-            free(copy);
-            return -1;
+    const char *cursor = text;
+    for (int color_index = 0; color_index < palette_size; color_index++) {
+        RGB *color = &out[color_index];
+        for (int component = 0; component < 3; component++) {
+            while (isspace((unsigned char)*cursor)) cursor++;
+            errno = 0;
+            char *end = NULL;
+            long value = strtol(cursor, &end, 10);
+            if (end == cursor || errno == ERANGE || value < 0 || value > 255) {
+                fprintf(stderr,
+                        "Error: --palette-rgb components must be integers from 0 to 255\n");
+                return -1;
+            }
+            if (component == 0) color->r = (uint8_t)value;
+            if (component == 1) color->g = (uint8_t)value;
+            if (component == 2) color->b = (uint8_t)value;
+
+            cursor = end;
+            while (isspace((unsigned char)*cursor)) cursor++;
+            char expected = component < 2 ? ','
+                           : color_index + 1 < palette_size ? ';' : '\0';
+            if (*cursor != expected) goto invalid_format;
+            if (expected != '\0') cursor++;
         }
-        int value;
-        if (parse_int_option("palette RGB component", token, 0, 255, &value) != 0) {
-            free(copy);
-            return -1;
-        }
-        RGB *color = &out[component / 3];
-        if (component % 3 == 0) color->r = (uint8_t)value;
-        if (component % 3 == 1) color->g = (uint8_t)value;
-        if (component % 3 == 2) color->b = (uint8_t)value;
-        component++;
-        token = strtok_r(NULL, ",; \t\r\n", &save);
-    }
-    free(copy);
-    if (component != palette_size * 3) {
-        fprintf(stderr, "Error: --palette-rgb requires exactly %d RGB components; got %d\n",
-                palette_size * 3, component);
-        return -1;
     }
     if (out[0].r != 0 || out[0].g != 0 || out[0].b != 0 ||
         out[palette_size - 1].r != 255 || out[palette_size - 1].g != 255 ||
@@ -223,6 +280,13 @@ static int parse_palette_rgb(const char *text, int palette_size, RGB out[8])
         }
     }
     return 0;
+
+invalid_format:
+    fprintf(stderr,
+            "Error: --palette-rgb requires exactly %d R,G,B triplets "
+            "separated by semicolons\n",
+            palette_size);
+    return -1;
 }
 
 /* Standard QR Code Model 2 black/white palette */
@@ -232,12 +296,6 @@ static const RGB PALETTE_QR[2] = {
 
 #define DEFAULT_SYMBOL_VERSION 30
 #define MAX_HCC2D_PLANES 3
-
-typedef enum {
-    /* ORDER_SHUFFLE removed: disabled to keep transmission order always
-     * reproducible (interleaved, no re-randomization). */
-    ORDER_SEQUENTIAL
-} PlayOrderMode;
 
 /* =========================================================================
  * QR Model 2 version table (versions 1–40)
@@ -467,7 +525,7 @@ static void rs_remainder(const uint8_t *data, int data_len, int ec_words, uint8_
 #define CELL(mat, dim, y, x) ((mat)[(y) * (dim) + (x)])
 
 static int *alloc_matrix(int dim) {
-    int *m = (int *)xmalloc((size_t)dim * dim * sizeof(int));
+    int *m = (int *)xmalloc((size_t)dim * (size_t)dim * sizeof(int));
     for (int i = 0; i < dim * dim; i++) m[i] = UNASSIGNED;
     return m;
 }
@@ -786,7 +844,8 @@ static BitBuffer interleave_ec(const BitBuffer *data_bb, int num_total,
     int bdata_len[MAX_BLOCKS], bec_len[MAX_BLOCKS];
 
     if (num_blocks > MAX_BLOCKS) {
-        fprintf(stderr, "Error: too many RS blocks (%d > MAX_BLOCKS=%d)\n",
+        fprintf(stderr,
+                "Error: too many Reed-Solomon blocks (%d > limit %d)\n",
                 num_blocks, MAX_BLOCKS);
         exit(1);
     }
@@ -799,7 +858,9 @@ static BitBuffer interleave_ec(const BitBuffer *data_bb, int num_total,
         int dl, el;
         get_block_layout(num_total, num_data, num_blocks, b, &dl, &el);
         if (dl > MAX_BLOCK_BYTES || el > MAX_BLOCK_BYTES) {
-            fprintf(stderr, "Error: RS block %d too large (data=%d ec=%d, max=%d)\n",
+            fprintf(stderr,
+                    "Error: Reed-Solomon block %d is too large "
+                    "(data=%d, parity=%d, limit=%d)\n",
                     b, dl, el, MAX_BLOCK_BYTES);
             free(src);
             exit(1);
@@ -886,7 +947,7 @@ static int *build_function_pattern(const QRVersion *qrv) {
     embed_type_info(mat, dim, 'L', 0);
     if (qrv->number >= 7)
         embed_version_info(mat, dim, qrv->number);
-    int *fp = (int *)xmalloc((size_t)dim * dim * sizeof(int));
+    int *fp = (int *)xmalloc((size_t)dim * (size_t)dim * sizeof(int));
     for (int i = 0; i < dim * dim; i++)
         fp[i] = (mat[i] != UNASSIGNED) ? 1 : 0;
     free(mat);
@@ -914,7 +975,7 @@ static int *render_modules(int **planes, int plane_count, const QRVersion *qrv, 
     int dim   = 17 + 4 * qrv->number;
     int full  = dim + 2;
     int white = period - 1;
-    int *out  = (int *)xmalloc((size_t)full * full * sizeof(int));
+    int *out  = (int *)xmalloc((size_t)full * (size_t)full * sizeof(int));
     for (int i = 0; i < full * full; i++) out[i] = white;
 
     int *fp = build_function_pattern(qrv);
@@ -1171,7 +1232,7 @@ static int encode_qr(const uint8_t *payload, int payload_len,
         int data_bytes = ec_total_sym(&qec) - ec_total_cw(&qec);
         int needed_bits = 4 + qr_byte_count_bits(version) + payload_len * 8;
         if (needed_bits > data_bytes * 8) {
-            snprintf(err, 256, "qr payload does not fit in version %d", version);
+            snprintf(err, 256, "QR payload does not fit in version %d", version);
             return -1;
         }
     } else {
@@ -1183,7 +1244,7 @@ static int encode_qr(const uint8_t *payload, int payload_len,
             if (needed_bits <= data_bytes * 8) { qrv = qv; qec = qe; break; }
         }
         if (!qrv) {
-            snprintf(err, 256, "qr payload does not fit in any supported version");
+            snprintf(err, 256, "QR payload does not fit in any supported version");
             return -1;
         }
     }
@@ -1205,7 +1266,7 @@ static int encode_qr(const uint8_t *payload, int payload_len,
     bb_free(&final);
 
     int dim = 17 + 4 * qrv->number;
-    int *modules = (int *)xmalloc((size_t)dim * dim * sizeof(int));
+    int *modules = (int *)xmalloc((size_t)dim * (size_t)dim * sizeof(int));
     for (int i = 0; i < dim * dim; i++)
         modules[i] = mat[i] ? 0 : 1; /* dark module -> palette index 0 (black) */
     free(mat);
@@ -1229,15 +1290,15 @@ static int encode_qr(const uint8_t *payload, int payload_len,
 
 /* =========================================================================
  * HCC2DF memory-based wrapper
- * build_hcc2df_mem: takes a filename string + raw data bytes, wraps in HCC2DF
- * Returns malloced bytes; caller must free.
+ * build_hcc2df_mem wraps a filename and raw data bytes in HCC2DF.
+ * The caller owns the returned allocation.
  * ========================================================================= */
 
 static uint8_t *build_hcc2df_mem(const char *filename, const uint8_t *content, size_t fsz,
                                   size_t *out_len) {
     size_t fnl = strlen(filename);
     if (fnl == 0 || fnl > 127) {
-        fprintf(stderr, "Warning: hcc2df filename length out of range (%zu)\n", fnl);
+        fprintf(stderr, "Warning: HCC2DF filename length out of range (%zu)\n", fnl);
         if (fnl > 127) fnl = 127;
     }
 
@@ -1259,9 +1320,8 @@ static uint8_t *build_hcc2df_mem(const char *filename, const uint8_t *content, s
                 compressed = NULL;
             }
         }
-        /* If the allocation or compression failed, fall through and store
-         * the content uncompressed (cflag stays 0) rather than aborting —
-         * compression here is an optimization, not a requirement. */
+        /* Compression is optional. Store the original content if allocation
+         * or compression fails, or if the compressed form is not smaller. */
     }
 
     size_t pl = 6 + 1 + 1 + 1 + fnl + stored_l;
@@ -1282,10 +1342,8 @@ static uint8_t *build_hcc2df_mem(const char *filename, const uint8_t *content, s
 
 /* =========================================================================
  * Reed-Solomon erasure coding — Cauchy matrix over GF(256)
- * Dynamic k data shards, m parity shards (k <= k_max, m computed from
- * parity_num/parity_den; see the --k-max/--parity-num/--parity-den CLI
- * options and their defaults K_MAX_DEFAULT/PARITY_NUM_DEFAULT/
- * PARITY_DEN_DEFAULT above)
+ * Dynamic k data shards and m parity shards. k is limited by
+ * --max-data-shards, and m is calculated from --parity-ratio.
  * Cauchy matrix entry [i][j] = gf_inv(i XOR (m + j))
  *   for i in 0..m-1, j in 0..k-1
  * ========================================================================= */
@@ -1297,8 +1355,10 @@ static uint8_t *build_hcc2df_mem(const char *filename, const uint8_t *content, s
 static void rs_encode_parity(const uint8_t *data_shards,
                               uint8_t *parity_shards,
                               int k, int m) {
+    if (m == 0) return;
+
     /* Build Cauchy matrix: cauchy[i*k+j] = gf_inv(i XOR (m + j)) */
-    uint8_t *cauchy = (uint8_t *)xmalloc((size_t)m * k);
+    uint8_t *cauchy = (uint8_t *)xmalloc((size_t)m * (size_t)k);
     for (int i = 0; i < m; i++)
         for (int j = 0; j < k; j++)
             cauchy[i * k + j] = (uint8_t)gf_inv(i ^ (m + j));
@@ -1311,7 +1371,7 @@ static void rs_encode_parity(const uint8_t *data_shards,
             if (c == 0) continue;
             const uint8_t *dsj = data_shards + (size_t)j * g_shard_data_bytes;
             uint8_t       *psi = parity_shards + (size_t)i * g_shard_data_bytes;
-            for (int b = 0; b < g_shard_data_bytes; b++)
+            for (size_t b = 0; b < g_shard_data_bytes; b++)
                 psi[b] ^= (uint8_t)gf_mul(c, dsj[b]);
         }
     }
@@ -1319,103 +1379,58 @@ static void rs_encode_parity(const uint8_t *data_shards,
 }
 
 /* =========================================================================
- * StreamChunk: application-layer header inside every HCC2DF content field.
- * HCC2DF wrapper_version stays 0x01 (unchanged). A decoder identifies a
- * streaming shard by checking content[0..7] == "HCC2DST\0".
- * See PROTOCOL.md for the full two-layer design.
+ * StreamChunk: HCC2DST v2 header inside every HCC2DF content field.
+ * The HCC2DF wrapper version is 0x01. A decoder identifies a streaming shard
+ * by checking content[0..7] == "HCC2DST\0".
  * ========================================================================= */
 
-typedef struct __attribute__((packed)) {
-    char     magic[8];            /* "HCC2DST\0" — identifies streaming content */
-    uint8_t  protocol_version;    /* StreamChunk protocol version = 0x02 */
-    uint8_t  session_id[4];       /* random 4-byte session ID */
-    uint32_t orig_size;           /* original file size before any compression */
-    uint8_t  whole_compressed;    /* 1 = whole file was zlib-compressed before sharding */
-    uint8_t  fname_len;           /* original filename length (max 32) */
-    char     fname[32];           /* original filename (zero-padded) */
-    uint16_t n_groups;            /* total RS groups in this session */
-    uint16_t group_idx;           /* 0-based index of this shard's RS group */
-    uint8_t  rs_k;                /* data shards in this group */
-    uint8_t  rs_m;                /* parity shards in this group */
-    uint8_t  shard_idx;           /* 0..rs_k+rs_m-1 */
-    uint8_t  _pad;                /* reserved, set to 0 */
-    uint32_t shard_bytes;         /* valid data bytes in this shard */
-    uint32_t file_crc32;          /* v0x02: CRC-32 of the original file */
-    uint32_t crc32;               /* v0x02: see stream_chunk_crc32() below */
-} StreamChunk; /* 71 bytes */
+/* StreamChunk v2 is a fixed, explicitly little-endian wire format. Encoding
+ * fields into a byte array avoids depending on host endianness, compiler
+ * padding, or unaligned accesses from a packed C struct. */
+#define STREAM_CHUNK_SIZE             71u
+#define STREAM_CHUNK_FILE_CRC_OFFSET  63u
+#define STREAM_CHUNK_CRC_OFFSET       67u
 
-/* The layout is wire format, so its size is normative, not incidental. The
- * shard crc32 stays last, so it covers every field ahead of it. */
-typedef char stream_chunk_is_71_bytes[(sizeof(StreamChunk) == 71) ? 1 : -1];
-typedef char stream_chunk_file_crc_at_63[(offsetof(StreamChunk, file_crc32) == 63) ? 1 : -1];
-typedef char stream_chunk_crc_at_67[(offsetof(StreamChunk, crc32) == 67) ? 1 : -1];
+static void put_le16(uint8_t *dst, uint16_t value) {
+    dst[0] = (uint8_t)(value & 0xFFu);
+    dst[1] = (uint8_t)((value >> 8) & 0xFFu);
+}
 
-/* Session-level digest: CRC-32 of the original file, before whole-file
- * compression and before sharding, identical in every shard of a session.
- *
- * The per-shard crc32 below verifies each shard as it arrives, so with
- * correct reassembly the file is right by construction — but "by
- * construction" covers the shards, not the code that orders, truncates,
- * inflates and concatenates them, nor the case of two sessions colliding on
- * a session_id. This field is what a receiver checks once, at completion,
- * against what it actually produced. When whole-file compression is on,
- * zlib's own Adler-32 already verifies the inflated stream; this covers the
- * uncompressed case too, and covers reassembly in both. */
+static void put_le32(uint8_t *dst, uint32_t value) {
+    dst[0] = (uint8_t)(value & 0xFFu);
+    dst[1] = (uint8_t)((value >> 8) & 0xFFu);
+    dst[2] = (uint8_t)((value >> 16) & 0xFFu);
+    dst[3] = (uint8_t)((value >> 24) & 0xFFu);
+}
 
-/* Integrity check for one shard, protocol version 0x02.
- *
- * Covers the header with its own crc32 field taken as zero, immediately
- * followed by the shard payload at its FIXED size, padding included. Two
- * choices there are deliberate and neither is cosmetic.
- *
- * Covering the header, not just the payload. The symbol's own Reed-Solomon
- * layer works on independent blocks, so a block that mis-corrects — decodes
- * to a valid but wrong codeword, which no inner check catches — damages the
- * bytes of that block and leaves the others intact. The header sits in the
- * first block or two, so exactly that failure can hand the receiver a sound
- * payload carrying a corrupted group_idx or shard_idx. Range validation
- * cannot see it: shard 5 becoming shard 7 passes every bound. The receiver
- * would then file a good payload under the wrong index, and because the
- * erasure decoder selects its submatrix BY index, the whole group inverts
- * to garbage. Silently. An erasure code carries no integrity of its own; it
- * has to be handed inputs someone else has verified.
- *
- * Covering the fixed shard size, not shard_bytes. If the length fed to the
- * CRC came from a header field, verifying the CRC would require trusting a
- * field the CRC is supposed to protect. The fixed size closes that loop: it
- * follows from symbol version, colour mode and EC level, all of which the
- * receiver knows from the symbol before reading a single header byte.
- *
- * Computed on the uncompressed bytes, before the HCC2DF wrapper, which may
- * compress; the receiver therefore verifies after unwrapping and inflating,
- * and before using any header field to place the shard.
- *
- * CRC-32/ISO-HDLC (reflected 0xEDB88320, init and final xor 0xFFFFFFFF) —
- * zlib's own crc32(), so both ends share one implementation.
- */
-static uint32_t stream_chunk_crc32(const StreamChunk *hdr,
+/* file_crc32 is computed over the original file before compression and
+ * sharding. The receiver checks it after reconstructing the complete file. */
+
+/* The per-shard CRC covers the 71-byte header with its crc32 field set to
+ * zero, followed by the fixed-size padded shard payload. Using the fixed
+ * payload size avoids trusting shard_bytes before the header is verified.
+ * The CRC is calculated before optional HCC2DF compression and checked by the
+ * receiver after HCC2DF decompression. zlib implements CRC-32/ISO-HDLC. */
+static uint32_t stream_chunk_crc32(const uint8_t header[STREAM_CHUNK_SIZE],
                                    const uint8_t *payload, size_t payload_len)
 {
-    StreamChunk zeroed = *hdr;
-    zeroed.crc32 = 0;
+    uint8_t zeroed[STREAM_CHUNK_SIZE];
+    memcpy(zeroed, header, sizeof(zeroed));
+    memset(zeroed + STREAM_CHUNK_CRC_OFFSET, 0, 4);
     uLong c = crc32(0L, Z_NULL, 0);
-    c = crc32(c, (const Bytef *)&zeroed, (uInt)sizeof(StreamChunk));
+    c = crc32(c, (const Bytef *)zeroed, (uInt)sizeof(zeroed));
     c = crc32(c, (const Bytef *)payload, (uInt)payload_len);
     return (uint32_t)c;
 }
-
-
-/* Store a filename in the 32-byte fname field, per PROTOCOL.md.
+/* Store a filename in the 32-byte HCC2DST fname field.
  *
  * Names that fit are stored whole. Longer ones keep their extension — the
  * last '.' and everything after it, when that is itself shorter than the
  * field — and lose the middle of the stem. A cut must never split a UTF-8
  * sequence, so it backs off over continuation bytes (0x80-0xBF) to the
- * previous character boundary; the field can therefore end up shorter than
+ * preceding character boundary; the field can therefore end up shorter than
  * 32 bytes, which is why fname_len exists.
- *
- * Leaving this to implementations would mean two conforming senders naming
- * the same file differently. */
+ */
 static size_t utf8_floor(const char *s, size_t n) {
     while (n > 0 && ((unsigned char)s[n] & 0xC0) == 0x80) n--;
     return n;
@@ -1444,7 +1459,7 @@ static void set_fname_field(char field[32], uint8_t *len_out, const char *name) 
 }
 
 /* Build the full HCC2DF-wrapped payload for one shard.
- * Returns malloced bytes; caller must free. */
+ * The caller owns the returned allocation. */
 static uint8_t *build_shard_payload(
     const uint8_t *shard_data,        /* g_shard_data_bytes bytes */
     uint32_t       orig_size,         /* original file size before any compression */
@@ -1461,40 +1476,44 @@ static uint8_t *build_shard_payload(
     const char    *hcc2df_filename,   /* HCC2DF wrapper filename */
     size_t        *out_len)
 {
-    StreamChunk hdr;
-    memset(&hdr, 0, sizeof(hdr));
-    memcpy(hdr.magic, "HCC2DST\0", 8);
-    hdr.protocol_version  = 0x02;
-    memcpy(hdr.session_id, session_id, 4);
-    hdr.orig_size         = orig_size;
-    hdr.whole_compressed  = whole_compressed;
-    set_fname_field(hdr.fname, &hdr.fname_len, orig_filename);
-    hdr.n_groups  = n_groups;
-    hdr.group_idx = group_idx;
-    hdr.rs_k      = rs_k;
-    hdr.rs_m      = rs_m;
-    hdr.shard_idx = shard_idx;
-    hdr._pad      = 0;
-    hdr.shard_bytes = shard_valid_bytes;
-    hdr.file_crc32  = file_crc32;
+    uint8_t header[STREAM_CHUNK_SIZE] = {0};
+    memcpy(header, "HCC2DST\0", 8);
+    header[8] = 0x02;
+    memcpy(header + 9, session_id, 4);
+    put_le32(header + 13, orig_size);
+    header[17] = whole_compressed;
+    set_fname_field((char *)(header + 19), &header[18], orig_filename);
+    if (header[18] == 0) {
+        set_fname_field((char *)(header + 19), &header[18], "received_file");
+    }
+    put_le16(header + 51, n_groups);
+    put_le16(header + 53, group_idx);
+    header[55] = rs_k;
+    header[56] = rs_m;
+    header[57] = shard_idx;
+    header[58] = 0;
+    put_le32(header + 59, shard_valid_bytes);
+    put_le32(header + STREAM_CHUNK_FILE_CRC_OFFSET, file_crc32);
 
     /* Last field set: everything the CRC covers must already be in place. */
-    hdr.crc32 = stream_chunk_crc32(&hdr, shard_data, g_shard_data_bytes);
+    uint32_t shard_crc = stream_chunk_crc32(header, shard_data,
+                                            g_shard_data_bytes);
+    put_le32(header + STREAM_CHUNK_CRC_OFFSET, shard_crc);
 
     /* raw_payload = StreamChunk header + shard_data */
-    size_t raw_len = sizeof(StreamChunk) + g_shard_data_bytes;
+    size_t raw_len = STREAM_CHUNK_SIZE + g_shard_data_bytes;
     uint8_t *raw = (uint8_t *)xmalloc(raw_len);
-    memcpy(raw, &hdr, sizeof(StreamChunk));
-    memcpy(raw + sizeof(StreamChunk), shard_data, g_shard_data_bytes);
+    memcpy(raw, header, STREAM_CHUNK_SIZE);
+    memcpy(raw + STREAM_CHUNK_SIZE, shard_data, g_shard_data_bytes);
 
-    /* Wrap in HCC2DF v0x01 (transport layer, unchanged) */
+    /* Wrap the shard in an HCC2DF v1 transport envelope. */
     uint8_t *wrapped = build_hcc2df_mem(hcc2df_filename, raw, raw_len, out_len);
     free(raw);
     return wrapped;
 }
 
 /* =========================================================================
- * SymbolFrame: stores one encoded HCC2D symbol
+ * SymbolFrame: stores one encoded QR or HCC2D symbol
  * ========================================================================= */
 
 typedef struct {
@@ -1505,38 +1524,106 @@ typedef struct {
     int          pal_size;
 } SymbolFrame;
 
+static void free_symbol_frames(SymbolFrame *frames, int count) {
+    if (!frames) return;
+    for (int i = 0; i < count; i++) free(frames[i].pixels);
+    free(frames);
+}
+
+static void free_group_storage(uint8_t **data_shards,
+                               uint8_t **parity_shards,
+                               uint32_t count) {
+    for (uint32_t i = 0; i < count; i++) {
+        free(data_shards ? data_shards[i] : NULL);
+        free(parity_shards ? parity_shards[i] : NULL);
+    }
+    free(data_shards);
+    free(parity_shards);
+}
+
 /* =========================================================================
  * SDL2 display
  * ========================================================================= */
 
-/* Convert packed 4 bpp palette-index pixels to RGBA8888 and create an SDL_Texture */
-static SDL_Texture *create_texture_from_symbol(SDL_Renderer *renderer,
-                                               const SymbolFrame *sf) {
-    SDL_Texture *tex = SDL_CreateTexture(renderer,
-                                         SDL_PIXELFORMAT_RGBA8888,
-                                         SDL_TEXTUREACCESS_STATIC,
-                                         sf->width, sf->height);
-    if (!tex) return NULL;
-
-    uint32_t *rgba = (uint32_t *)malloc((size_t)sf->width * sf->height * 4);
-    if (!rgba) {
-        SDL_DestroyTexture(tex);
-        return NULL;
-    }
+/* Convert one packed 4-bpp symbol into the shared RGBA texture. */
+static int update_texture_from_symbol(SDL_Texture *texture,
+                                      const SymbolFrame *sf,
+                                      uint32_t *rgba) {
     for (int y = 0; y < sf->height; y++) {
         for (int x = 0; x < sf->width; x++) {
             int i = y * sf->width + x;
             int idx = packed_raster_get(sf->pixels, sf->width, x, y);
             if (idx < 0 || idx >= sf->pal_size) idx = sf->pal_size - 1;
             RGB c = sf->palette[idx];
-            /* SDL_PIXELFORMAT_RGBA8888: R in bits 31-24, G in 23-16, B in 15-8, A in 7-0 */
+            /* SDL_PIXELFORMAT_RGBA8888 stores R, G, B, and A from the most
+             * significant byte to the least significant byte. */
             rgba[i] = ((uint32_t)c.r << 24) | ((uint32_t)c.g << 16)
                     | ((uint32_t)c.b <<  8) | 0xFF;
         }
     }
-    SDL_UpdateTexture(tex, NULL, rgba, sf->width * 4);
-    free(rgba);
-    return tex;
+    return SDL_UpdateTexture(texture, NULL, rgba, sf->width * 4);
+}
+
+static int generate_session_id(uint8_t session_id[4]) {
+    FILE *random_source = fopen("/dev/urandom", "rb");
+    if (!random_source) return -1;
+    size_t count = fread(session_id, 1, 4, random_source);
+    int close_status = fclose(random_source);
+    return (count == 4 && close_status == 0) ? 0 : -1;
+}
+
+static int utf8_is_valid(const char *text) {
+    const unsigned char *p = (const unsigned char *)text;
+    while (*p) {
+        if (*p <= 0x7Fu) {
+            p++;
+        } else if (*p >= 0xC2u && *p <= 0xDFu &&
+                   p[1] >= 0x80u && p[1] <= 0xBFu) {
+            p += 2;
+        } else if (*p == 0xE0u &&
+                   p[1] >= 0xA0u && p[1] <= 0xBFu &&
+                   p[2] >= 0x80u && p[2] <= 0xBFu) {
+            p += 3;
+        } else if (((*p >= 0xE1u && *p <= 0xECu) ||
+                    (*p >= 0xEEu && *p <= 0xEFu)) &&
+                   p[1] >= 0x80u && p[1] <= 0xBFu &&
+                   p[2] >= 0x80u && p[2] <= 0xBFu) {
+            p += 3;
+        } else if (*p == 0xEDu &&
+                   p[1] >= 0x80u && p[1] <= 0x9Fu &&
+                   p[2] >= 0x80u && p[2] <= 0xBFu) {
+            p += 3;
+        } else if (*p == 0xF0u &&
+                   p[1] >= 0x90u && p[1] <= 0xBFu &&
+                   p[2] >= 0x80u && p[2] <= 0xBFu &&
+                   p[3] >= 0x80u && p[3] <= 0xBFu) {
+            p += 4;
+        } else if (*p >= 0xF1u && *p <= 0xF3u &&
+                   p[1] >= 0x80u && p[1] <= 0xBFu &&
+                   p[2] >= 0x80u && p[2] <= 0xBFu &&
+                   p[3] >= 0x80u && p[3] <= 0xBFu) {
+            p += 4;
+        } else if (*p == 0xF4u &&
+                   p[1] >= 0x80u && p[1] <= 0x8Fu &&
+                   p[2] >= 0x80u && p[2] <= 0xBFu &&
+                   p[3] >= 0x80u && p[3] <= 0xBFu) {
+            p += 4;
+        } else {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int filename_is_receiver_safe(const char *name) {
+    if (!name || *name == '\0' || !utf8_is_valid(name)) return 0;
+
+    int has_non_space = 0;
+    for (const unsigned char *p = (const unsigned char *)name; *p; p++) {
+        if (*p < 0x20u || *p == 0x7Fu) return 0;
+        if (!isspace(*p)) has_non_space = 1;
+    }
+    return has_non_space;
 }
 
 /* =========================================================================
@@ -1553,54 +1640,43 @@ static void print_usage(const char *prog) {
 "Description:\n"
 "  Reads <file>, splits it into Reed-Solomon shards with dynamic k/m groups,\n"
 "  encodes each shard as an HCC2D symbol or a standard QR Code (shard size\n"
-"  is derived to be the byte-perfect max payload for the chosen mode/EC\n"
+"  is derived from the maximum available payload for the chosen mode/EC\n"
 "  level/version), then streams all symbols in an SDL2 window in an\n"
-"  infinite loop. Press ESC or close the window to exit.\n\n"
+"  infinite loop. Input files may be up to 2 MiB (2,097,152 bytes).\n"
+"  Press ESC or close the window to exit.\n\n"
 "Companion app:\n"
 "  To receive this stream and recover the file, point a smartphone camera at\n"
-"  the window using the HCC2D Decoder app:\n"
+"  the window. HCC2DST v2 output requires HCC2D Decoder version 1.2.4 or later:\n"
 "    iOS (Apple App Store):       https://apps.apple.com/us/app/hcc2d-decoder/id6762202762\n"
 "    Android (Google Play):       https://play.google.com/store/apps/details?id=com.hcc2d.decoder\n"
 "    Android (Huawei AppGallery): https://appgallery.cloud.huawei.com/marketshare/app/C117478101\n\n"
 "Usage:\n"
-"  %s [options] <file>\n\n"
+"  %s [options] <file>\n\n", prog);
+    fputs(
 "Options:\n"
-"  --colors {2,4,8}         selects the kind of code to generate, by palette\n"
-"                           size: 2 = a standard QR Code (black/white),\n"
-"                           4 = HCC2D 4-colour, or 8 = HCC2D 8-colour\n"
-"                           (default: 8).\n"
-"                           Mutually exclusive with --mode.\n"
 "  --mode {qr,hcc2d4,hcc2d8}\n"
-"                           selects the kind of code to generate, spelled\n"
-"                           out instead of by palette size: qr (same as\n"
-"                           --colors 2), hcc2d4 (same as --colors 4), or\n"
-"                           hcc2d8 (same as --colors 8; default).\n"
-"                           Mutually exclusive with --colors.\n"
-"  --ec-level {L,M,Q,H}    error-correction level: L~7%% M~15%% Q~25%% H~30%%\n"
+"                           symbol family: standard QR, four-color HCC2D,\n"
+"                           or eight-color HCC2D (default: hcc2d8).\n"
+"  --ec-level {L,M,Q,H}    error-correction level: L~7% M~15% Q~25% H~30%\n"
 "                           (default: M)\n"
 "  --version N              symbol version 1-40; higher versions carry more\n"
 "                           data per symbol but render smaller modules.\n"
 "                           (default: 30)\n"
-"  --fps N                  display frame rate, 10-20 (default: 10)\n"
+"  --fps N                  display frame rate: 10, 12, 15, or 20\n"
+"                           symbols per second; each divides evenly into\n"
+"                           a commonly used 60 Hz refresh rate (default: 10)\n"
 "  --display N              SDL display index to use for window placement\n"
-"                           and size calculation (default: 0)\n"
-"  --k-max N                largest number of data shards (rs_k) any single\n"
+"                           and size calculation; N must be non-negative\n"
+"                           (default: 0)\n"
+"  --max-data-shards N      largest number of data shards any single\n"
 "                           Reed-Solomon group may hold before the file is\n"
-"                           split into an additional group; independent of\n"
-"                           --parity-num/--parity-den below (default: 150).\n"
-"                           The only limit HCC2DST itself imposes is\n"
-"                           rs_k+rs_m <= 255 (single-byte fields), enforced\n"
-"                           regardless of this value.\n"
-"  --parity-num N           numerator of the parity ratio: each group's\n"
-"                           parity shard count is round(k * parity-num /\n"
-"                           parity-den), k being that group's own data\n"
-"                           shard count (default: 70).\n"
-"  --parity-den N           denominator of the parity ratio above\n"
-"                           (default: 100). --k-max, --parity-num, and\n"
-"                           --parity-den are three independent parameters;\n"
-"                           changing one does not require changing the\n"
-"                           others, though rs_k+rs_m <= 255 is always\n"
-"                           enforced regardless of what they are set to.\n"
+"                           split into an additional group (default: 150).\n"
+"                           The effective limit is lowered automatically\n"
+"                           when needed to keep data plus parity <= 255.\n"
+"  --parity-ratio R         parity shards relative to data shards, from 0\n"
+"                           to 1 with up to 6 decimal places (default: 0.70).\n"
+"                           For example, 0.70 adds about 70 parity shards\n"
+"                           per 100 data shards.\n"
 "  --quiet-zone N           quiet-zone width in modules around the symbol\n"
 "                           (default: 4). Lower values leave more display\n"
 "                           height/width for the module scale but shrink\n"
@@ -1611,41 +1687,38 @@ static void print_usage(const char *prog) {
 "                           instead of being reduced by the titlebar\n"
 "                           (default: titlebar shown).\n"
 "  --palette-rgb LIST       complete custom RGB palette for HCC2D4/8,\n"
-"                           quoted as R,G,B;R,G,B;... . Index 0 must be black\n"
-"                           and the final index white.\n"
-"  --help                   show this help and exit\n\n"
+"                           with semicolon-separated R,G,B triplets. The\n"
+"                           first entry must be black and the last white.\n"
+"  --help                   show this help and exit\n\n", stdout);
+    printf(
 "Examples:\n"
 "  %s myfile.pdf\n"
-"  %s --colors 8 --ec-level L --version 40 --fps 15 myfile.pdf\n"
+"  %s --mode hcc2d8 --ec-level L --version 40 --fps 15 myfile.pdf\n"
 "  %s --mode qr --version 10 myfile.pdf\n"
-"  %s --k-max 100 --parity-num 20 --parity-den 100 myfile.pdf\n",
-        prog, prog, prog, prog, prog);
+"  %s --max-data-shards 100 --parity-ratio 0.20 myfile.pdf\n",
+        prog, prog, prog, prog);
 }
 
 int main(int argc, char **argv) {
-    int         colors_opt  = 0;    /* 0 = --colors not given */
-    const char *mode_opt    = NULL; /* NULL = --mode not given */
+    const char *mode_opt = NULL;
     char ec_level   = 'M';
     int version     = DEFAULT_SYMBOL_VERSION;
     int display_fps = DEFAULT_DISPLAY_FPS;
     int display_index = 0;
-    int k_max       = K_MAX_DEFAULT;
-    int parity_num  = PARITY_NUM_DEFAULT;
-    int parity_den  = PARITY_DEN_DEFAULT;
+    int max_data_shards = MAX_DATA_SHARDS_DEFAULT;
+    uint32_t parity_ratio = PARITY_RATIO_DEFAULT;
     int quiet_zone  = DEFAULT_QUIET_ZONE;
     int show_titlebar = 1;
     const char *palette_rgb_opt = NULL;
 
     static struct option long_opts[] = {
-        {"colors",     required_argument, 0, 'c'},
         {"mode",       required_argument, 0, 'm'},
         {"ec-level",   required_argument, 0, 'e'},
         {"version",    required_argument, 0, 'v'},
         {"fps",        required_argument, 0, 'f'},
         {"display",    required_argument, 0, 'd'},
-        {"k-max",      required_argument, 0, 'k'},
-        {"parity-num", required_argument, 0, 'p'},
-        {"parity-den", required_argument, 0, 'q'},
+        {"max-data-shards", required_argument, 0, 'k'},
+        {"parity-ratio", required_argument, 0, 'r'},
         {"quiet-zone", required_argument, 0, 'z'},
         {"no-titlebar", no_argument,      0, 't'},
         {"palette-rgb", required_argument, 0, 'P'},
@@ -1658,16 +1731,6 @@ int main(int argc, char **argv) {
     int c;
     while ((c = getopt_long(argc, argv, "", long_opts, NULL)) != -1) {
         switch (c) {
-            case 'c': {
-                int val;
-                if (parse_int_option("colors", optarg, 2, 8, &val) != 0
-                    || (val != 2 && val != 4 && val != 8)) {
-                    fprintf(stderr, "Error: --colors must be 2, 4, or 8\n");
-                    return 1;
-                }
-                colors_opt = val;
-                break;
-            }
             case 'm':
                 if (strcmp(optarg, "qr") != 0 && strcmp(optarg, "hcc2d4") != 0
                     && strcmp(optarg, "hcc2d8") != 0) {
@@ -1691,24 +1754,25 @@ int main(int argc, char **argv) {
             case 'f':
                 if (parse_int_option("fps", optarg, 10, 20, &display_fps) != 0)
                     return 1;
+                if (display_fps != 10 && display_fps != 12 &&
+                    display_fps != 15 && display_fps != 20) {
+                    fprintf(stderr, "Error: --fps must be 10, 12, 15, or 20\n");
+                    return 1;
+                }
                 break;
             case 'd':
-                if (parse_int_option("display", optarg, 0, 64, &display_index) != 0)
+                if (parse_int_option("display", optarg, 0, INT_MAX, &display_index) != 0)
                     return 1;
                 break;
             case 'k':
-                /* rs_k's own field range is 1-254 (Table: HCC2DST shard
-                 * header); the compound rs_k+rs_m<=255 check below is
-                 * still enforced independently of this per-field bound. */
-                if (parse_int_option("k-max", optarg, 1, 254, &k_max) != 0)
+                /* rs_k occupies one byte in the HCC2DST header. The effective
+                 * group limit is adjusted for the selected parity ratio. */
+                if (parse_int_option("max-data-shards", optarg, 1, 255,
+                                     &max_data_shards) != 0)
                     return 1;
                 break;
-            case 'p':
-                if (parse_int_option("parity-num", optarg, 0, 1000000, &parity_num) != 0)
-                    return 1;
-                break;
-            case 'q':
-                if (parse_int_option("parity-den", optarg, 1, 1000000, &parity_den) != 0)
+            case 'r':
+                if (parse_parity_ratio(optarg, &parity_ratio) != 0)
                     return 1;
                 break;
             case 'z':
@@ -1730,39 +1794,6 @@ int main(int argc, char **argv) {
         }
     }
 
-    if (colors_opt != 0 && mode_opt != NULL) {
-        fprintf(stderr, "Error: --colors and --mode cannot be used together\n");
-        return 1;
-    }
-
-    /* Validate --k-max/--parity-num/--parity-den together up front, at
-     * their worst case (a group that actually reaches k_max data shards),
-     * rather than relying on the per-group clamp further below: that
-     * clamp only ever shrank n=k+m back down to N_LIMIT without also
-     * reducing m, which was safe only because the *default* k_max/
-     * parity_num/parity_den values were chosen so the clamp could never
-     * actually trigger. Now that these three are independent, user-set
-     * parameters, an arbitrary combination (e.g. a large --k-max together
-     * with a large --parity-num/--parity-den ratio) really can drive
-     * rs_k+rs_m past 255 -- which the clamp would then silently paper
-     * over by writing a truncated rs_m inconsistent with the true parity
-     * shard count, corrupting the stream rather than failing loudly.
-     * Reject that combination here instead. */
-    {
-        uint32_t worst_m = (uint32_t)((double)k_max * parity_num / parity_den + 0.5);
-        if ((uint32_t)k_max + worst_m > N_LIMIT) {
-            fprintf(stderr,
-                "Error: --k-max %d with --parity-num %d --parity-den %d "
-                "would need %u parity shards at k=%d, giving rs_k+rs_m=%u, "
-                "which exceeds the protocol's %d-shard-per-group limit "
-                "(rs_k+rs_m <= %d). Lower --k-max or the parity-num/"
-                "parity-den ratio.\n",
-                k_max, parity_num, parity_den, worst_m, k_max,
-                (uint32_t)k_max + worst_m, N_LIMIT, N_LIMIT);
-            return 1;
-        }
-    }
-
     if (optind >= argc) {
         fprintf(stderr, "Error: input file required.\n"
                         "Usage: %s [options] <file>\n", argv[0]);
@@ -1774,23 +1805,8 @@ int main(int argc, char **argv) {
     }
     const char *input_path = argv[optind];
 
-    /* Resolve the unified encoding mode from whichever of --colors/--mode
-     * was given (never both, checked above); default is HCC2D8 when
-     * neither is given. */
-    const char *enc_mode;
-    int         pal_size;
-    if (mode_opt) {
-        enc_mode = mode_opt;
-        pal_size = palette_size_for_mode(enc_mode);
-    } else if (colors_opt != 0) {
-        pal_size = colors_opt;
-        enc_mode = (pal_size == 2)  ? "qr"
-                 : (pal_size == 4)  ? "hcc2d4"
-                                    : "hcc2d8";
-    } else {
-        pal_size = 8;
-        enc_mode = "hcc2d8";
-    }
+    const char *enc_mode = mode_opt ? mode_opt : "hcc2d8";
+    int pal_size = palette_size_for_mode(enc_mode);
 
     if (palette_rgb_opt && pal_size == 2) {
         fprintf(stderr, "Error: --palette-rgb is supported for HCC2D4/8 only\n");
@@ -1818,21 +1834,43 @@ int main(int argc, char **argv) {
     /* Read input file */
     FILE *f = fopen(input_path, "rb");
     if (!f) {
-        fprintf(stderr, "Error: cannot open '%s'\n", input_path);
+        fprintf(stderr, "Error: cannot open '%s': %s\n", input_path, strerror(errno));
         return 1;
     }
-    fseek(f, 0, SEEK_END);
-    long file_size_long = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (file_size_long <= 0) {
-        fprintf(stderr, "Error: file is empty or unreadable\n");
+    if (fseeko(f, 0, SEEK_END) != 0) {
+        fprintf(stderr, "Error: cannot seek in '%s': %s\n", input_path, strerror(errno));
         fclose(f);
         return 1;
     }
-    uint32_t orig_size = (uint32_t)file_size_long;
+    off_t file_size = ftello(f);
+    if (file_size < 0) {
+        fprintf(stderr, "Error: cannot determine the size of '%s': %s\n",
+                input_path, strerror(errno));
+        fclose(f);
+        return 1;
+    }
+    if (fseeko(f, 0, SEEK_SET) != 0) {
+        fprintf(stderr, "Error: cannot rewind '%s': %s\n", input_path, strerror(errno));
+        fclose(f);
+        return 1;
+    }
+    if (file_size == 0) {
+        fprintf(stderr, "Error: input file is empty\n");
+        fclose(f);
+        return 1;
+    }
+    if ((uint64_t)file_size > MAX_INPUT_FILE_BYTES) {
+        fprintf(stderr,
+                "Error: input file is too large (%llu bytes); HCC2D Decoder "
+                "supports files up to 2 MiB (2,097,152 bytes)\n",
+                (unsigned long long)file_size);
+        fclose(f);
+        return 1;
+    }
+    uint32_t orig_size = (uint32_t)file_size;
     uint8_t *file_data = (uint8_t *)xmalloc((size_t)orig_size);
     if (fread(file_data, 1, (size_t)orig_size, f) != (size_t)orig_size) {
-        fprintf(stderr, "Error: read error\n");
+        fprintf(stderr, "Error: could not read all bytes from '%s'\n", input_path);
         free(file_data);
         fclose(f);
         return 1;
@@ -1844,9 +1882,9 @@ int main(int argc, char **argv) {
     uint32_t file_crc32 = (uint32_t)crc32(crc32(0L, Z_NULL, 0),
                                           (const Bytef *)file_data, (uInt)orig_size);
 
-    /* Whole-file pre-compression (PROTOCOL.md §Encoding pipeline).
-     * Compressing the whole file before RS sharding gives a much better ratio
-     * than per-shard compression on 512-byte blocks.
+    /* Compress the complete file before erasure sharding.
+     * Whole-file compression generally provides a better ratio than
+     * compressing shards independently.
      * The whole_compressed flag is stored in every StreamChunk so the decoder
      * knows to zlib-decompress after RS reassembly. */
     uint8_t  whole_compressed = 0;
@@ -1872,29 +1910,40 @@ int main(int argc, char **argv) {
         }
     }
 
-    /* Extract original filename */
+    /* Extract a receiver-safe original filename. */
     const char *orig_fname = strrchr(input_path, '/');
     if (!orig_fname) orig_fname = strrchr(input_path, '\\');
     orig_fname = orig_fname ? orig_fname + 1 : input_path;
+    if (!filename_is_receiver_safe(orig_fname)) orig_fname = "received_file";
 
-    /* Generate random 4-byte session ID */
-    srand((unsigned)time(NULL));
+    /* Generate an independent session identifier for receiver-side grouping. */
     uint8_t session_id[4];
-    for (int i = 0; i < 4; i++) session_id[i] = (uint8_t)(rand() & 0xFF);
+    if (generate_session_id(session_id) != 0) {
+        fprintf(stderr, "Error: cannot obtain a session ID from /dev/urandom\n");
+        free(compressed_buf);
+        free(file_data);
+        return 1;
+    }
 
-    /* HCC2D session hex string */
+    /* Printable session identifier used in HCC2DF wrapper filenames. */
     char session_hex[9];
     snprintf(session_hex, sizeof(session_hex), "%02X%02X%02X%02X",
              session_id[0], session_id[1], session_id[2], session_id[3]);
 
-    /* Get current datetime string */
+    /* Timestamp used in HCC2DF wrapper filenames. */
     time_t now = time(NULL);
-    struct tm *tm_now = localtime(&now);
+    struct tm tm_now;
     char datetime_str[16]; /* YYYYMMDDHHMMSS + NUL */
-    strftime(datetime_str, sizeof(datetime_str), "%Y%m%d%H%M%S", tm_now);
+    if (now == (time_t)-1 || !localtime_r(&now, &tm_now) ||
+        strftime(datetime_str, sizeof(datetime_str), "%Y%m%d%H%M%S", &tm_now) == 0) {
+        fprintf(stderr, "Error: cannot create the stream timestamp\n");
+        free(compressed_buf);
+        free(file_data);
+        return 1;
+    }
 
-    /* Derive the byte-perfect max shard size for the chosen mode/EC
-     * level/version: raw symbol data capacity minus the mode/count-field/
+    /* Derive the maximum shard size for the chosen mode, EC level, and
+     * version: raw symbol data capacity minus the mode/count-field/
      * terminator header (header_overhead_bytes; 3 bytes for HCC2D's fixed
      * 16-bit count, 2 or 3 bytes for QR's real Byte-mode count field),
      * minus the StreamChunk header, minus the HCC2DF wrapper overhead
@@ -1905,6 +1954,8 @@ int main(int argc, char **argv) {
         if (!qrv) {
             fprintf(stderr, "Error: unsupported mode/version combination: %s v%d\n",
                     enc_mode, version);
+            free(compressed_buf);
+            free(file_data);
             return 1;
         }
         ECEntry hec = hcc2d_ec(&qrv->ec[ec_idx], plane_count);
@@ -1916,34 +1967,46 @@ int main(int argc, char **argv) {
         size_t hcc2df_overhead = 6 + 1 + 1 + 1 + strlen(worst_fname);
 
         int max_shard_bytes = raw_data_bytes - header_overhead_bytes(enc_mode, version)
-                                              - (int)sizeof(StreamChunk)
+                                              - (int)STREAM_CHUNK_SIZE
                                               - (int)hcc2df_overhead;
         if (max_shard_bytes < 1) {
             fprintf(stderr,
                 "Error: version %d with mode %s and EC level %c has no room "
                 "for shard data; pick a higher version or lower EC level\n",
                 version, enc_mode, ec_level);
+            free(compressed_buf);
+            free(file_data);
             return 1;
         }
-        g_shard_data_bytes = max_shard_bytes;
+        g_shard_data_bytes = (size_t)max_shard_bytes;
     }
 
     /* Compute number of data chunks (shards) */
-    uint32_t n_data_shards_total = (encode_size + g_shard_data_bytes - 1) / g_shard_data_bytes;
+    uint32_t shard_size = (uint32_t)g_shard_data_bytes;
+    uint32_t n_data_shards_total = encode_size / shard_size
+                                 + (encode_size % shard_size != 0u ? 1u : 0u);
     if (n_data_shards_total == 0) n_data_shards_total = 1;
 
-    /* Number of RS groups: ceil(D / k_max) */
-    uint32_t n_groups = (n_data_shards_total + (uint32_t)k_max - 1) / (uint32_t)k_max;
-    if (n_groups == 0) n_groups = 1;
+    /* The parity ratio can reduce the usable data-shard limit because the
+     * HCC2DST header stores k and m in one byte each and requires k+m <= 255. */
+    uint32_t group_data_limit = effective_data_shard_limit(
+        (uint32_t)max_data_shards, parity_ratio);
 
-    /* Compute per-group parameters using equal-split algorithm. No group's
-     * k can exceed k_max by construction (n_groups above was chosen so the
-     * evenly-split k never does), and --k-max/--parity-num/--parity-den
-     * were already validated together against N_LIMIT at their worst case
-     * (k=k_max) before we reach this loop -- so n=k+m is guaranteed to
-     * stay at or under N_LIMIT for every group here, and unlike the
-     * previous version of this code, nothing here needs to (or should)
-     * silently clamp n on its own. */
+    /* Number of RS groups: ceil(D / group_data_limit) */
+    uint32_t n_groups = n_data_shards_total / group_data_limit
+                      + (n_data_shards_total % group_data_limit != 0u ? 1u : 0u);
+    if (n_groups == 0) n_groups = 1;
+    if (n_groups > UINT16_MAX) {
+        fprintf(stderr,
+                "Error: transfer requires %u Reed-Solomon groups; HCC2DST "
+                "supports at most %u groups\n",
+                n_groups, UINT16_MAX);
+        free(compressed_buf);
+        free(file_data);
+        return 1;
+    }
+
+    /* Split data shards as evenly as possible across valid RS groups. */
     GroupParams *groups = (GroupParams *)xmalloc(n_groups * sizeof(GroupParams));
     {
         uint32_t assigned = 0;
@@ -1951,7 +2014,7 @@ int main(int argc, char **argv) {
             uint32_t remaining_shards = n_data_shards_total - assigned;
             uint32_t remaining_groups = n_groups - g;
             uint32_t k = (remaining_shards + remaining_groups - 1) / remaining_groups;
-            uint32_t m = (uint32_t)((double)k * parity_num / parity_den + 0.5);
+            uint32_t m = parity_shard_count(k, parity_ratio);
             uint32_t n = k + m;
             groups[g].k          = k;
             groups[g].m          = m;
@@ -1962,33 +2025,38 @@ int main(int argc, char **argv) {
     }
 
     /* Total symbols: sum of n[g] across all groups */
-    uint32_t n_symbols_total = 0;
+    uint64_t n_symbols_total_64 = 0;
     uint32_t max_n = 0;
     for (uint32_t g = 0; g < n_groups; g++) {
-        n_symbols_total += groups[g].n;
+        n_symbols_total_64 += groups[g].n;
         if (groups[g].n > max_n) max_n = groups[g].n;
     }
 
-    if (n_symbols_total > MAX_SYMBOLS) {
+    if (n_symbols_total_64 > MAX_SYMBOLS) {
         fprintf(stderr,
-            "Warning: file would produce %u symbols (> MAX_SYMBOLS=%d). "
-            "Capping at %d symbols.\n",
-            n_symbols_total, MAX_SYMBOLS, MAX_SYMBOLS);
-        n_symbols_total = MAX_SYMBOLS;
+            "Error: transfer requires %llu symbols; the safe limit is %d. "
+            "Use a larger symbol version, a lower EC level, or a lower "
+            "--parity-ratio.\n",
+            (unsigned long long)n_symbols_total_64, MAX_SYMBOLS);
+        free(groups);
+        free(compressed_buf);
+        free(file_data);
+        return 1;
     }
+    uint32_t n_symbols_total = (uint32_t)n_symbols_total_64;
 
     printf("File: %s (%u bytes", orig_fname, orig_size);
     if (whole_compressed)
         printf(", pre-compressed to %u bytes (%.0f%%)", encode_size,
                100.0 * encode_size / orig_size);
     printf(")\n");
-    printf("Symbol: %s, EC %c, %d colors, version %d, display fps: %d, shard size: %d bytes\n",
-           enc_mode, ec_level, pal_size, version, display_fps,
-           g_shard_data_bytes);
-    printf("RS groups: %u, total symbols: %u\n", n_groups, n_symbols_total);
+    printf("Symbol: %s, EC %c, version %d, display fps: %d, shard size: %zu bytes\n",
+           enc_mode, ec_level, version, display_fps, g_shard_data_bytes);
+    printf("Reed-Solomon groups: %u, total symbols: %u\n",
+           n_groups, n_symbols_total);
     for (uint32_t g = 0; g < n_groups && g < 4; g++)
-        printf("  group %u: k=%u m=%u n=%u data_start=%u\n",
-               g, groups[g].k, groups[g].m, groups[g].n, groups[g].data_start);
+        printf("  group %u: data=%u, parity=%u, total=%u\n",
+               g + 1u, groups[g].k, groups[g].m, groups[g].n);
     if (n_groups > 4) printf("  ... (showing first 4 groups)\n");
 
     /* -----------------------------------------------------------------------
@@ -2009,7 +2077,7 @@ int main(int argc, char **argv) {
         /* Fill data shards from encode_data */
         for (uint32_t s = 0; s < gp.k; s++) {
             uint32_t global_shard = gp.data_start + s;
-            uint32_t byte_offset  = global_shard * g_shard_data_bytes;
+            uint32_t byte_offset  = global_shard * shard_size;
             uint32_t bytes_avail  = (byte_offset < encode_size)
                                   ? (encode_size - byte_offset) : 0;
             uint32_t bytes_copy   = (bytes_avail > (uint32_t)g_shard_data_bytes)
@@ -2040,6 +2108,8 @@ int main(int argc, char **argv) {
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
         fprintf(stderr, "SDL_Init error: %s\n", SDL_GetError());
         free(frames);
+        free_group_storage(group_data_shards, group_parity_shards, n_groups);
+        free(groups);
         return 1;
     }
 
@@ -2047,6 +2117,8 @@ int main(int argc, char **argv) {
     if (num_displays <= 0) {
         fprintf(stderr, "SDL_GetNumVideoDisplays error: %s\n", SDL_GetError());
         free(frames);
+        free_group_storage(group_data_shards, group_parity_shards, n_groups);
+        free(groups);
         SDL_Quit();
         return 1;
     }
@@ -2054,6 +2126,8 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Error: display index %d out of range; %d display(s) available\n",
                 display_index, num_displays);
         free(frames);
+        free_group_storage(group_data_shards, group_parity_shards, n_groups);
+        free(groups);
         SDL_Quit();
         return 1;
     }
@@ -2072,7 +2146,8 @@ int main(int argc, char **argv) {
         display_bounds.h = screen_h;
     }
 
-    int display_size = (int)(screen_h * 1.00);
+    int display_size = display_bounds.w < display_bounds.h
+                     ? display_bounds.w : display_bounds.h;
     if (display_size < 1) display_size = 1;
     int window_x = display_bounds.x + (display_bounds.w - display_size) / 2;
     int window_y = display_bounds.y + (display_bounds.h - display_size) / 2;
@@ -2080,6 +2155,7 @@ int main(int argc, char **argv) {
     int symbols_encoded = 0;
     int min_symbol_version = 999;
     int max_symbol_version = 0;
+    int encoding_failed = 0;
 
     for (uint32_t si = 0; si < max_n && symbols_encoded < (int)n_symbols_total; si++) {
         for (uint32_t g = 0; g < n_groups && symbols_encoded < (int)n_symbols_total; g++) {
@@ -2093,9 +2169,8 @@ int main(int argc, char **argv) {
                 /* Data shard */
                 shard_data = group_data_shards[g] + (size_t)si * g_shard_data_bytes;
                 uint32_t global_shard = gp.data_start + si;
-                uint32_t byte_offset  = global_shard * g_shard_data_bytes;
-                /* encode_data already freed; but we have the shard copy */
-                /* shard_valid_bytes = min(g_shard_data_bytes, bytes left from encode_size) */
+                uint32_t byte_offset  = global_shard * shard_size;
+                /* Record the unpadded data length for this shard. */
                 if (byte_offset < encode_size) {
                     uint32_t bytes_left = encode_size - byte_offset;
                     shard_valid_bytes = (bytes_left > (uint32_t)g_shard_data_bytes)
@@ -2106,7 +2181,7 @@ int main(int argc, char **argv) {
             } else {
                 /* Parity shard */
                 shard_data = group_parity_shards[g] + (size_t)(si - gp.k) * g_shard_data_bytes;
-                shard_valid_bytes = g_shard_data_bytes;
+                shard_valid_bytes = shard_size;
             }
 
             /* Build HCC2DF filename */
@@ -2134,27 +2209,36 @@ int main(int argc, char **argv) {
                 &payload_len);
 
             if (!payload) {
-                fprintf(stderr, "Error: failed to build shard payload g=%u si=%u\n", g, si);
-                continue;
+                fprintf(stderr,
+                        "Error: failed to build payload for group index %u, "
+                        "shard index %u\n",
+                        g, si);
+                encoding_failed = 1;
+                break;
             }
 
-            /* Encode symbol at the largest integer scale that fits display_size. */
+            /* Keep one palette-index pixel per module. SDL applies the final
+             * integer scale while rendering, keeping memory use independent
+             * of the display resolution. */
             EncodedSymbol sym = {0};
             char enc_err[256] = "";
             int ret = (strcmp(enc_mode, "qr") == 0)
                 ? encode_qr(payload, (int)payload_len,
                             ec_level, version,
-                            display_size, quiet_zone,
+                            1, quiet_zone,
                             &sym, enc_err)
                 : encode_hcc2d(payload, (int)payload_len,
                                enc_mode, ec_level, version,
-                               display_size, quiet_zone,
+                               1, quiet_zone,
                                &sym, enc_err);
             free(payload);
 
             if (ret != 0) {
-                fprintf(stderr, "Error encoding shard g=%u si=%u: %s\n", g, si, enc_err);
-                continue;
+                fprintf(stderr,
+                        "Error: cannot encode group index %u, shard index %u: %s\n",
+                        g, si, enc_err);
+                encoding_failed = 1;
+                break;
             }
 
             frames[symbols_encoded].pixels   = sym.pixels;
@@ -2170,6 +2254,7 @@ int main(int argc, char **argv) {
                 printf("\rEncoded %d/%u symbols...", symbols_encoded, n_symbols_total);
             fflush(stdout);
         }
+        if (encoding_failed) break;
     }
     printf("\nEncoded %d symbols total.\n", symbols_encoded);
     if (symbols_encoded > 0) {
@@ -2181,17 +2266,16 @@ int main(int argc, char **argv) {
     }
 
     /* Free per-group shard storage */
-    for (uint32_t g = 0; g < n_groups; g++) {
-        free(group_data_shards[g]);
-        free(group_parity_shards[g]);
-    }
-    free(group_data_shards);
-    free(group_parity_shards);
+    free_group_storage(group_data_shards, group_parity_shards, n_groups);
     free(groups);
 
-    if (symbols_encoded == 0) {
-        fprintf(stderr, "Error: no symbols encoded\n");
-        free(frames);
+    if (encoding_failed || symbols_encoded != (int)n_symbols_total) {
+        if (!encoding_failed) {
+            fprintf(stderr, "Error: encoded %d of %u required symbols\n",
+                    symbols_encoded, n_symbols_total);
+        }
+        free_symbol_frames(frames, symbols_encoded);
+        SDL_Quit();
         return 1;
     }
 
@@ -2205,47 +2289,65 @@ int main(int argc, char **argv) {
     if (!window) {
         fprintf(stderr, "SDL_CreateWindow error: %s\n", SDL_GetError());
         SDL_Quit();
-        free(frames);
+        free_symbol_frames(frames, symbols_encoded);
         return 1;
     }
 
+    if (SDL_SetHintWithPriority(SDL_HINT_RENDER_SCALE_QUALITY, "0",
+                                SDL_HINT_OVERRIDE) == SDL_FALSE) {
+        fprintf(stderr, "SDL error: cannot enable nearest-neighbor symbol scaling\n");
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        free_symbol_frames(frames, symbols_encoded);
+        return 1;
+    }
     SDL_Renderer *renderer = SDL_CreateRenderer(window, -1,
         SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    if (!renderer) {
+        renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
+    }
     if (!renderer) {
         fprintf(stderr, "SDL_CreateRenderer error: %s\n", SDL_GetError());
         SDL_DestroyWindow(window);
         SDL_Quit();
-        free(frames);
+        free_symbol_frames(frames, symbols_encoded);
         return 1;
     }
 
-    /* Pre-create all SDL textures */
-    printf("Creating %d textures...\n", symbols_encoded);
-    SDL_Texture **textures = (SDL_Texture **)calloc((size_t)symbols_encoded, sizeof(SDL_Texture *));
-    if (!textures) {
-        fprintf(stderr, "Error: out of memory for textures\n");
+    int texture_w = frames[0].width;
+    int texture_h = frames[0].height;
+    for (int i = 1; i < symbols_encoded; i++) {
+        if (frames[i].width != texture_w || frames[i].height != texture_h) {
+            fprintf(stderr, "Error: inconsistent encoded symbol dimensions\n");
+            SDL_DestroyRenderer(renderer);
+            SDL_DestroyWindow(window);
+            SDL_Quit();
+            free_symbol_frames(frames, symbols_encoded);
+            return 1;
+        }
+    }
+
+    SDL_Texture *texture = SDL_CreateTexture(renderer,
+                                             SDL_PIXELFORMAT_RGBA8888,
+                                             SDL_TEXTUREACCESS_STREAMING,
+                                             texture_w, texture_h);
+    if (!texture) {
+        fprintf(stderr, "SDL_CreateTexture error: %s\n", SDL_GetError());
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
         SDL_Quit();
-        free(frames);
+        free_symbol_frames(frames, symbols_encoded);
         return 1;
     }
 
-    for (int i = 0; i < symbols_encoded; i++) {
-        textures[i] = create_texture_from_symbol(renderer, &frames[i]);
-        if (!textures[i]) {
-            fprintf(stderr, "Warning: failed to create texture %d: %s\n", i, SDL_GetError());
-        }
-    }
+    uint32_t *rgba = (uint32_t *)xmalloc((size_t)texture_w * (size_t)texture_h
+                                         * sizeof(uint32_t));
     printf("Ready. Streaming at %d fps. Press ESC or close window to exit.\n", display_fps);
-
-    /* Play order array — always the interleaved order (shuffle mode removed) */
-    int *play_order = (int *)xmalloc((size_t)symbols_encoded * sizeof(int));
-    for (int i = 0; i < symbols_encoded; i++) play_order[i] = i;
 
     /* Main display loop */
     int idx     = 0;
     int running = 1;
+    int exit_status = 0;
     SDL_Event ev;
 
     while (running) {
@@ -2259,46 +2361,45 @@ int main(int argc, char **argv) {
         }
         if (!running) break;
 
-        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-        SDL_RenderClear(renderer);
+        if (update_texture_from_symbol(texture, &frames[idx], rgba) != 0) {
+            fprintf(stderr, "SDL_UpdateTexture error: %s\n", SDL_GetError());
+            exit_status = 1;
+            break;
+        }
+        if (SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255) != 0 ||
+            SDL_RenderClear(renderer) != 0) {
+            fprintf(stderr, "SDL render-clear error: %s\n", SDL_GetError());
+            exit_status = 1;
+            break;
+        }
 
-        if (textures[play_order[idx]]) {
-            SDL_Rect dst;
-            dst.w = frames[play_order[idx]].width;
-            dst.h = frames[play_order[idx]].height;
-            dst.x = (display_size - dst.w) / 2;
-            /* Top-anchored, not centred: the integer pixel scale leaves a
-             * few pixels over, and splitting them above and below put a
-             * black band under the symbol at every start. Horizontally
-             * centred still, vertically flush with the top edge. */
-            dst.y = 0;
-            SDL_RenderCopy(renderer, textures[play_order[idx]], NULL, &dst);
+        int render_scale = display_size / frames[idx].width;
+        if (render_scale < 1) render_scale = 1;
+        SDL_Rect dst;
+        dst.w = frames[idx].width * render_scale;
+        dst.h = frames[idx].height * render_scale;
+        dst.x = (display_size - dst.w) / 2;
+        dst.y = 0;
+        if (SDL_RenderCopy(renderer, texture, NULL, &dst) != 0) {
+            fprintf(stderr, "SDL_RenderCopy error: %s\n", SDL_GetError());
+            exit_status = 1;
+            break;
         }
         SDL_RenderPresent(renderer);
 
         idx++;
-        if (idx >= symbols_encoded) {
-            /* End of loop; restart from the beginning of the interleaved
-             * order. Fisher-Yates re-shuffling removed along with shuffle
-             * mode: the play order is now always ORDER_SEQUENTIAL. */
-            idx = 0;
-        }
+        if (idx >= symbols_encoded) idx = 0;
 
         Uint32 elapsed = SDL_GetTicks() - t0;
         if (elapsed < (Uint32)frame_ms)
             SDL_Delay((Uint32)frame_ms - elapsed);
     }
-    free(play_order);
-
     /* Cleanup */
-    for (int i = 0; i < symbols_encoded; i++) {
-        free(frames[i].pixels);
-        if (textures[i]) SDL_DestroyTexture(textures[i]);
-    }
-    free(frames);
-    free(textures);
+    free(rgba);
+    SDL_DestroyTexture(texture);
+    free_symbol_frames(frames, symbols_encoded);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
-    return 0;
+    return exit_status;
 }

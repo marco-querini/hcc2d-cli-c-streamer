@@ -1,0 +1,3 @@
+# This package is distributed through the standalone HCC2D APT repository,
+# not submitted to the Debian archive, so there is no Debian ITP bug to close.
+new-package-should-close-itp-bug

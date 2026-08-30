@@ -33,10 +33,44 @@ apt-repo/public/*
 
 # Private signing material and local GnuPG state
 .secrets/
+.gnupg/
+gnupg/
 *.private-key
 *.secret-key
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.kdbx
+*.mobileprovision
+id_rsa
+id_rsa.*
+id_dsa
+id_dsa.*
+id_ecdsa
+id_ecdsa.*
+id_ed25519
+id_ed25519.*
+secring.gpg
+pubring.kbx
+trustdb.gpg
+random_seed
+S.gpg-agent*
 private-keys-v1.d/
 openpgp-revocs.d/
+
+# Local credentials and environment files
+.env
+.env.*
+!.env.example
+credentials
+credentials.*
+*.credentials
+*.token
+.aws/
+.config/gcloud/
 
 # Editor and operating-system files
 .DS_Store
