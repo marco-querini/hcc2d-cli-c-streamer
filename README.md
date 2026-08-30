@@ -136,7 +136,7 @@ Use the default HCC2D8 profile:
 ./hcc2d_streamer document.pdf
 ```
 
-Theoretical symbol-layer rate: **~0.33 Mbps**.
+Theoretical symbol-layer rate: **~0.47 Mbps**.
 
 Stream HCC2D8 version 40 at 15 symbols per second with EC level L:
 
@@ -146,13 +146,20 @@ Stream HCC2D8 version 40 at 15 symbols per second with EC level L:
 
 Theoretical symbol-layer rate: **~1.06 Mbps**.
 
+Usable throughput also depends on the display, receiving phone, framing,
+lighting, and other capture conditions. In controlled optical-link testing, the
+same HCC2D8 version 40, EC L, 15 fps profile with a Google Pixel 7 achieved a
+mean file-transfer goodput of 1.036 Mbps. See the
+[30-second 1 Mbps video demonstration](https://www.youtube.com/watch?v=z9uHewx-wNo).
+Results on other hardware and in other environments may vary.
+
 Stream HCC2D4:
 
 ```bash
 ./hcc2d_streamer --mode hcc2d4 --ec-level M --version 30 document.pdf
 ```
 
-Theoretical symbol-layer rate: **~0.22 Mbps**.
+Theoretical symbol-layer rate: **~0.26 Mbps**.
 
 Stream standard QR Codes:
 
@@ -160,7 +167,7 @@ Stream standard QR Codes:
 ./hcc2d_streamer --mode qr --ec-level L --version 20 document.pdf
 ```
 
-Theoretical symbol-layer rate: **~0.07 Mbps**.
+Theoretical symbol-layer rate: **~0.08 Mbps**.
 
 These are theoretical symbol-layer rates: the data-codeword capacity after
 accounting for the internal QR/HCC2D Reed-Solomon overhead, multiplied by the
@@ -174,8 +181,8 @@ file-transfer throughput.
 |---|---:|---:|---|
 | `--mode` | `qr`, `hcc2d4`, `hcc2d8` | `hcc2d8` | Symbol family |
 | `--ec-level` | `L`, `M`, `Q`, `H` | `M` | Error correction inside each symbol |
-| `--version` | `1..40` | `30` | Fixed symbol version |
-| `--fps` | `10`, `12`, `15`, `20` | `10` | Displayed symbols per second |
+| `--version` | `1..40` | `33` | Fixed symbol version |
+| `--fps` | `10`, `12`, `15`, `20` | `12` | Displayed symbols per second |
 | `--display` | non-negative integer | `0` | SDL display used for window placement |
 | `--quiet-zone` | `0..16` | `4` | Quiet-zone width in modules |
 | `--no-titlebar` | flag | off | Hide window decorations |

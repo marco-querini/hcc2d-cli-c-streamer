@@ -205,7 +205,7 @@ typedef struct {
 #define MAX_BLOCK_BYTES    160
 #define UNASSIGNED         (-1)
 
-#define DEFAULT_DISPLAY_FPS 10
+#define DEFAULT_DISPLAY_FPS 12
 #define DEFAULT_QUIET_ZONE 4
 
 /* EC level bits for type-info encoding: L=1 M=0 Q=3 H=2 */
@@ -294,7 +294,7 @@ static const RGB PALETTE_QR[2] = {
     {0,0,0},{255,255,255}
 };
 
-#define DEFAULT_SYMBOL_VERSION 30
+#define DEFAULT_SYMBOL_VERSION 33
 #define MAX_HCC2D_PLANES 3
 
 /* =========================================================================
@@ -1661,10 +1661,10 @@ static void print_usage(const char *prog) {
 "                           (default: M)\n"
 "  --version N              symbol version 1-40; higher versions carry more\n"
 "                           data per symbol but render smaller modules.\n"
-"                           (default: 30)\n"
+"                           (default: 33)\n"
 "  --fps N                  display frame rate: 10, 12, 15, or 20\n"
 "                           symbols per second; each divides evenly into\n"
-"                           a commonly used 60 Hz refresh rate (default: 10)\n"
+"                           a commonly used 60 Hz refresh rate (default: 12)\n"
 "  --display N              SDL display index to use for window placement\n"
 "                           and size calculation; N must be non-negative\n"
 "                           (default: 0)\n"

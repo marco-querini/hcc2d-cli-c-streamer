@@ -5,6 +5,8 @@
 - Published the standalone single-file C HCC2D Streamer.
 - Added standard QR, HCC2D4, and HCC2D8 symbol streams.
 - Added HCC2D symbol versions 1--40 and EC levels L, M, Q, and H.
+- Set the default streaming profile to HCC2D8 version 33, EC level M, at
+  12 symbols per second.
 - Added HCC2DST v2 output with stream-integrity checks.
 - Derived the maximum shard payload from the selected symbol capacity.
 - Enforced the Decoder-compatible 2 MiB maximum input-file size.

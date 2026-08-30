@@ -30,11 +30,11 @@ Select the symbol family. The default is \fBhcc2d8\fR.
 Set the error-correction level inside each symbol. The default is \fBM\fR.
 .TP
 \fB\-\-version\fR \fIN\fR
-Set the fixed symbol version from 1 to 40. The default is 30.
+Set the fixed symbol version from 1 to 40. The default is 33.
 .TP
 \fB\-\-fps\fR \fIN\fR
 Set the display rate to 10, 12, 15, or 20 symbols per second. The default is
-10. On a 60 Hz display, these rates show each symbol for exactly 6, 5, 4, or
+12. On a 60 Hz display, these rates show each symbol for exactly 6, 5, 4, or
 3 refresh cycles, respectively.
 .TP
 \fB\-\-display\fR \fIN\fR
@@ -73,7 +73,7 @@ Show the built-in help text and exit.
 Stream a file with the default HCC2D8 profile:
 .B hcc2d_streamer document.pdf
 .br
-Theoretical symbol-layer rate: approximately 0.33 Mbps.
+Theoretical symbol-layer rate: approximately 0.47 Mbps.
 .TP
 Stream HCC2D8 version 40 at 15 symbols per second:
 .B hcc2d_streamer \-\-mode hcc2d8 \-\-ec-level L \-\-version 40 \-\-fps 15 document.pdf
@@ -83,12 +83,12 @@ Theoretical symbol-layer rate: approximately 1.06 Mbps.
 Stream HCC2D4:
 .B hcc2d_streamer \-\-mode hcc2d4 \-\-ec-level M \-\-version 30 document.pdf
 .br
-Theoretical symbol-layer rate: approximately 0.22 Mbps.
+Theoretical symbol-layer rate: approximately 0.26 Mbps.
 .TP
 Stream standard QR Codes:
 .B hcc2d_streamer \-\-mode qr \-\-ec-level L \-\-version 20 document.pdf
 .br
-Theoretical symbol-layer rate: approximately 0.07 Mbps.
+Theoretical symbol-layer rate: approximately 0.08 Mbps.
 .PP
 These are theoretical symbol-layer rates: the data-codeword capacity after
 accounting for the internal QR/HCC2D Reed-Solomon overhead, multiplied by the

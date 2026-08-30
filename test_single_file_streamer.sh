@@ -241,10 +241,10 @@ static int check_capacity_rates(void)
 {
     struct RateCase { const char *mode; char ec; int version; int fps; int bytes; };
     static const struct RateCase cases[] = {
-        {"hcc2d8", 'M', 30, 10, 4119},
+        {"hcc2d8", 'M', 33, 12, 4893},
         {"hcc2d8", 'L', 40, 15, 8868},
-        {"hcc2d4", 'M', 30, 10, 2746},
-        {"qr",     'L', 20, 10,  861},
+        {"hcc2d4", 'M', 30, 12, 2746},
+        {"qr",     'L', 20, 12,  861},
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
         const struct RateCase *c = &cases[i];
@@ -463,15 +463,9 @@ int main(int argc, char **argv)
 
     char *streamer_argv[] = {
         (char *)"hcc2d_streamer",
-        (char *)"--mode", (char *)"hcc2d8",
-        (char *)"--ec-level", (char *)"M",
-        (char *)"--version", (char *)"10",
-        (char *)"--fps", (char *)"10",
-        (char *)"--max-data-shards", (char *)"255",
-        (char *)"--parity-ratio", (char *)"0",
         argv[1], NULL
     };
-    return hcc2d_streamer_cli_main(14, streamer_argv);
+    return hcc2d_streamer_cli_main(2, streamer_argv);
 }
 EOF
 
@@ -485,7 +479,8 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
 UBSAN_OPTIONS=halt_on_error=1 \
     "${MAIN_HARNESS}" "${TEST_DIR}/input.txt" \
     >"${TEST_DIR}/main.out" 2>"${TEST_DIR}/main.err"
-grep -q 'Ready. Streaming at 10 fps.' "${TEST_DIR}/main.out"
+grep -q 'Symbol: hcc2d8, EC M, version 33, display fps: 12' "${TEST_DIR}/main.out"
+grep -q 'Ready. Streaming at 12 fps.' "${TEST_DIR}/main.out"
 test ! -s "${TEST_DIR}/main.err"
 
 truncate -s 2097152 "${TEST_DIR}/max-size.bin"
@@ -493,7 +488,9 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
 UBSAN_OPTIONS=halt_on_error=1 \
     "${MAIN_HARNESS}" "${TEST_DIR}/max-size.bin" \
     >"${TEST_DIR}/max-size.out" 2>"${TEST_DIR}/max-size.err"
-grep -q 'Ready. Streaming at 10 fps.' "${TEST_DIR}/max-size.out"
+grep -q 'Symbol: hcc2d8, EC M, version 33, display fps: 12' \
+    "${TEST_DIR}/max-size.out"
+grep -q 'Ready. Streaming at 12 fps.' "${TEST_DIR}/max-size.out"
 test ! -s "${TEST_DIR}/max-size.err"
 
 printf 'PASS: build=1 help=1 invalid_inputs=18 supported_fps=4 boundary_encodes=480 protocol=1 option_model=1 parity_ratio=1 palette=1 filenames=1 erasure_subsets=35 main=1 max_input=1 sanitizer=%s\n' \
