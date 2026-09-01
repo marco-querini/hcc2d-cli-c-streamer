@@ -110,7 +110,7 @@ Debian/Ubuntu users can install it with:
 curl -fsSL https://hcc2d.com/apt-streamer/hcc2d-archive-keyring.gpg \
   | sudo tee /usr/share/keyrings/hcc2d-archive-keyring.gpg >/dev/null
 
-echo "deb [signed-by=/usr/share/keyrings/hcc2d-archive-keyring.gpg] https://hcc2d.com/apt-streamer noble main" \
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/hcc2d-archive-keyring.gpg] https://hcc2d.com/apt-streamer noble main" \
   | sudo tee /etc/apt/sources.list.d/hcc2d-streamer.list >/dev/null
 
 sudo apt update
