@@ -96,6 +96,29 @@ present.
 Generated pools, distribution metadata, and temporary files are ignored by
 Git. They must be deployed separately to the actual HTTPS package host.
 
+## Official repository and installation
+
+The official HCC2D Streamer repository is hosted at:
+
+```text
+https://hcc2d.com/apt-streamer/
+```
+
+Debian/Ubuntu users can install it with:
+
+```bash
+curl -fsSL https://hcc2d.com/apt-streamer/hcc2d-archive-keyring.gpg \
+  | sudo tee /usr/share/keyrings/hcc2d-archive-keyring.gpg >/dev/null
+
+echo "deb [signed-by=/usr/share/keyrings/hcc2d-archive-keyring.gpg] https://hcc2d.com/apt-streamer noble main" \
+  | sudo tee /etc/apt/sources.list.d/hcc2d-streamer.list >/dev/null
+
+sudo apt update
+sudo apt install hcc2d-streamer
+```
+
+Replace `noble` with the user distribution codename as needed.
+
 ## Export the public key
 
 If the public key needs to be regenerated from the signing keyring:
