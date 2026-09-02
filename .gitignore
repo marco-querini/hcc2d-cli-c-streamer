@@ -21,6 +21,8 @@ debian/tmp/
 # Temporary local output
 dist/
 apt-repo/tmp/
+*.gif
+*.gif.tmp.*
 
 # Retained locally; protocol documentation is not published yet
 PROTOCOL.md

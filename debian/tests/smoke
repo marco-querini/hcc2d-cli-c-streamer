@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-hcc2d_streamer --help >/dev/null
+hcc2d_streamer --help | grep -F -- '--export-gif FILE' >/dev/null
 
 if hcc2d_streamer --mode hcc2d16 --version 40 /dev/null >/dev/null 2>&1; then
     echo "Experimental HCC2D16 unexpectedly succeeded" >&2

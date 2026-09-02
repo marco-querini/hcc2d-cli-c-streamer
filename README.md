@@ -6,8 +6,9 @@ Standalone distribution of the HCC2D single-file C command-line Streamer.
 
 The program transfers a file from a desktop computer to a smartphone by
 displaying a repeating stream of QR, HCC2D4, or HCC2D8 symbols in an SDL2
-window. The HCC2D Decoder companion app captures the symbols and reconstructs
-the original file.
+window, or by exporting the complete sequence as a lossless animated GIF. The
+HCC2D Decoder companion app captures the symbols and reconstructs the original
+file.
 
 HCC2DST v2 streams require HCC2D Decoder version 1.2.4 or later.
 
@@ -46,6 +47,7 @@ This public distribution supports the following symbol families and profiles:
 - HCC2DST v2 output;
 - dynamic Reed-Solomon erasure groups;
 - configurable frame rate, display, quiet zone, and redundancy;
+- lossless, infinitely looping GIF89a export with integer module scaling;
 - optional complete custom RGB palettes for HCC2D4 and HCC2D8.
 
 ## Build from source
@@ -173,6 +175,45 @@ not part of this symbol-layer calculation: parity supports recovery, and the
 receiver can complete reconstruction as soon as the minimum required shards
 are available.
 
+## Lossless animated GIF export
+
+Use `--export-gif` to write one complete interleaved symbol sequence and exit
+without opening an SDL window:
+
+```bash
+./hcc2d_streamer --fps 10 --export-gif document-stream.gif document.pdf
+```
+
+The GIF loops indefinitely and includes every generated data and parity frame.
+It uses the exact QR/HCC2D palette and GIF LZW compression; no lossy image or
+video conversion is involved. Output is first completed in a temporary file
+beside the destination and then installed atomically, so a failed export does
+not replace an existing GIF with a partial file.
+
+The canvas defaults to 1080 by 1080 pixels. `--gif-side` selects another square
+canvas size:
+
+```bash
+./hcc2d_streamer --fps 12 --gif-side 640 \
+  --export-gif document-stream.gif document.pdf
+```
+
+The canvas has the requested dimensions, while the symbol is centred inside it
+and enlarged only by the largest integer factor that fits. Remaining pixels are
+black margins outside the symbol's own quiet zone. Modules therefore remain
+square, sharp, and equal-sized without interpolation or deformation.
+
+GIF frame delays use centiseconds. Rates of 10 and 20 fps are exact per frame;
+12 and 15 fps use alternating delays that approximate the requested rate as
+closely as the format's centisecond timing permits.
+> **Warning:** Open the exported GIF full-screen, ideally at 100% or an integer
+> zoom, and disable smooth image scaling. A viewer that resizes the animation
+> with interpolation can blur module edges and reduce decoding reliability.
+
+Playback timing ultimately depends on the GIF viewer; 10 fps is the conservative
+choice. A slower viewer only extends transfer time, while dropped frames can
+normally be recovered on a later loop through the Reed-Solomon parity.
+
 ## Main options
 
 | Option | Values | Default | Meaning |
@@ -180,7 +221,9 @@ are available.
 | `--mode` | `qr`, `hcc2d4`, `hcc2d8` | `hcc2d8` | Symbol family |
 | `--ec-level` | `L`, `M`, `Q`, `H` | `M` | Error correction inside each symbol |
 | `--version` | `1..40` | `33` | Fixed symbol version |
-| `--fps` | `10`, `12`, `15`, `20` | `12` | Displayed symbols per second |
+| `--fps` | `10`, `12`, `15`, `20` | `12` | Displayed or exported symbols per second |
+| `--export-gif` | output path | off | Export one complete looping GIF and exit |
+| `--gif-side` | `1..8192` | `1080` | Square GIF canvas side; requires `--export-gif` |
 | `--display` | non-negative integer | `0` | SDL display used for window placement |
 | `--quiet-zone` | `0..16` | `4` | Quiet-zone width in modules |
 | `--no-titlebar` | flag | off | Hide window decorations |
@@ -210,8 +253,8 @@ group exceed `k + m <= 255`, the Streamer automatically lowers the effective
 group limit. Consequently, every `--parity-ratio` value from 0 to 1 remains
 usable.
 
-The Streamer writes no temporary symbol images to disk. Symbols are generated
-in memory and rendered through a reusable SDL texture.
+Symbols are generated in memory and rendered through a reusable SDL texture,
+or written directly into the requested GIF without temporary frame images.
 
 ## Security and privacy
 

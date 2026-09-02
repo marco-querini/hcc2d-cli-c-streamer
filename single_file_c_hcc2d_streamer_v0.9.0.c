@@ -10,7 +10,8 @@
  *             $(pkg-config --cflags sdl2) single_file_c_hcc2d_streamer_v0.9.0.c \
  *             $(pkg-config --libs sdl2) -lz -lm
  * Usage:  ./hcc2d_streamer [--mode qr|hcc2d4|hcc2d8]
- *                      [--ec-level L|M|Q|H] [--version N] [--fps N] myfile.pdf
+ *                      [--ec-level L|M|Q|H] [--version N] [--fps N]
+ *                      [--export-gif FILE] [--gif-side N] myfile.pdf
  *
  * Specification compliance:
  *   Intended to conform to the HCC2D Code Specification version 0.9.0.
@@ -21,7 +22,8 @@
  *   encodes each shard as an HCC2D symbol or a standard QR Code at a fixed
  *   version (the shard size is derived from the maximum available payload for
  *   the chosen mode/EC level/version), then streams all symbols in an SDL2
- *   window in an infinite loop. Press ESC or close the window to exit.
+ *   window in an infinite loop or exports one lossless animated GIF cycle.
+ *   Press ESC or close the SDL window to exit.
  *
  * Companion app:
  *   To receive this stream and recover the file, point a smartphone camera
@@ -61,6 +63,8 @@
 #include <errno.h>
 #include <limits.h>
 #include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <getopt.h>
 #include <zlib.h>
 #include <SDL2/SDL.h>
@@ -129,6 +133,8 @@ static int parse_int_option(const char *name, const char *value,
 #define PARITY_RATIO_DEFAULT  700000u
 #define N_LIMIT          255
 #define MAX_INPUT_FILE_BYTES (2u * 1024u * 1024u)
+#define DEFAULT_GIF_SIDE 1080
+#define MAX_GIF_SIDE     8192
 /* Shard data bytes per symbol. main() derives this value from the selected
  * mode, error-correction level, and version before its first use. */
 static size_t g_shard_data_bytes = 0;
@@ -1542,6 +1548,360 @@ static void free_group_storage(uint8_t **data_shards,
 }
 
 /* =========================================================================
+ * Lossless animated GIF export
+ *
+ * GIF stores palette indices and compresses them with LZW, so the QR/HCC2D
+ * palette is preserved exactly. The symbol is enlarged only by an integer
+ * factor and centred in a square canvas; no resampling is performed.
+ * ========================================================================= */
+
+#define GIF_LZW_MAX_CODES 4096
+#define GIF_LZW_HASH_SIZE 5003
+
+typedef struct {
+    FILE *file;
+    uint8_t block[255];
+    size_t block_len;
+    uint32_t bit_buffer;
+    int bit_count;
+    int failed;
+    int code_size;
+    int clear_code;
+    int end_code;
+    int next_code;
+    int prefix_code;
+    int has_prefix;
+    int16_t hash_codes[GIF_LZW_HASH_SIZE];
+    uint16_t hash_prefixes[GIF_LZW_HASH_SIZE];
+    uint8_t hash_suffixes[GIF_LZW_HASH_SIZE];
+} GifLzwWriter;
+
+static int gif_write_bytes(FILE *file, const void *data, size_t size) {
+    return fwrite(data, 1, size, file) == size ? 0 : -1;
+}
+
+static int gif_write_u16(FILE *file, uint16_t value) {
+    uint8_t bytes[2] = {
+        (uint8_t)(value & 0xFFu),
+        (uint8_t)((value >> 8) & 0xFFu)
+    };
+    return gif_write_bytes(file, bytes, sizeof(bytes));
+}
+
+static void gif_lzw_flush_block(GifLzwWriter *writer) {
+    if (writer->failed || writer->block_len == 0) return;
+    if (fputc((int)writer->block_len, writer->file) == EOF ||
+        gif_write_bytes(writer->file, writer->block, writer->block_len) != 0) {
+        writer->failed = 1;
+    }
+    writer->block_len = 0;
+}
+
+static void gif_lzw_write_byte(GifLzwWriter *writer, uint8_t value) {
+    if (writer->failed) return;
+    writer->block[writer->block_len++] = value;
+    if (writer->block_len == sizeof(writer->block)) gif_lzw_flush_block(writer);
+}
+
+static void gif_lzw_write_code(GifLzwWriter *writer, int code) {
+    if (writer->failed) return;
+    writer->bit_buffer |= (uint32_t)code << writer->bit_count;
+    writer->bit_count += writer->code_size;
+    while (writer->bit_count >= 8) {
+        gif_lzw_write_byte(writer, (uint8_t)(writer->bit_buffer & 0xFFu));
+        writer->bit_buffer >>= 8;
+        writer->bit_count -= 8;
+    }
+}
+
+static void gif_lzw_reset_dictionary(GifLzwWriter *writer,
+                                     int minimum_code_size) {
+    memset(writer->hash_codes, 0xFF, sizeof(writer->hash_codes));
+    writer->code_size = minimum_code_size + 1;
+    writer->next_code = writer->end_code + 1;
+}
+
+static size_t gif_lzw_hash_slot(int prefix, uint8_t suffix) {
+    uint32_t key = ((uint32_t)prefix << 8) | suffix;
+    return (size_t)((key * 2654435761u) % GIF_LZW_HASH_SIZE);
+}
+
+static int gif_lzw_find(const GifLzwWriter *writer, int prefix,
+                        uint8_t suffix, size_t *slot_out) {
+    size_t slot = gif_lzw_hash_slot(prefix, suffix);
+    for (;;) {
+        int code = writer->hash_codes[slot];
+        if (code < 0) {
+            *slot_out = slot;
+            return -1;
+        }
+        if (writer->hash_prefixes[slot] == (uint16_t)prefix &&
+            writer->hash_suffixes[slot] == suffix) {
+            *slot_out = slot;
+            return code;
+        }
+        slot++;
+        if (slot == GIF_LZW_HASH_SIZE) slot = 0;
+    }
+}
+
+static void gif_lzw_start(GifLzwWriter *writer, FILE *file,
+                          int minimum_code_size) {
+    memset(writer, 0, sizeof(*writer));
+    writer->file = file;
+    writer->clear_code = 1 << minimum_code_size;
+    writer->end_code = writer->clear_code + 1;
+    gif_lzw_reset_dictionary(writer, minimum_code_size);
+    gif_lzw_write_code(writer, writer->clear_code);
+}
+
+static void gif_lzw_add_pixel(GifLzwWriter *writer, uint8_t pixel,
+                              int minimum_code_size) {
+    if (writer->failed) return;
+    if (!writer->has_prefix) {
+        writer->prefix_code = pixel;
+        writer->has_prefix = 1;
+        return;
+    }
+
+    size_t slot = 0;
+    int existing = gif_lzw_find(writer, writer->prefix_code, pixel, &slot);
+    if (existing >= 0) {
+        writer->prefix_code = existing;
+        return;
+    }
+
+    gif_lzw_write_code(writer, writer->prefix_code);
+    if (writer->next_code < GIF_LZW_MAX_CODES) {
+        writer->hash_codes[slot] = (int16_t)writer->next_code;
+        writer->hash_prefixes[slot] = (uint16_t)writer->prefix_code;
+        writer->hash_suffixes[slot] = pixel;
+        writer->next_code++;
+        /* The decoder is one dictionary entry behind the encoder. Increase
+         * the width only after crossing the current code-width boundary. */
+        if (writer->code_size < 12 &&
+            writer->next_code > (1 << writer->code_size)) {
+            writer->code_size++;
+        }
+    } else {
+        gif_lzw_write_code(writer, writer->clear_code);
+        gif_lzw_reset_dictionary(writer, minimum_code_size);
+    }
+    writer->prefix_code = pixel;
+}
+
+static int gif_lzw_finish(GifLzwWriter *writer) {
+    if (writer->failed) return -1;
+    if (writer->has_prefix) {
+        gif_lzw_write_code(writer, writer->prefix_code);
+        /* Reading the final data code lets the decoder add the entry which
+         * the encoder does not otherwise create at end of input. */
+        if (writer->code_size < 12 &&
+            writer->next_code == (1 << writer->code_size)) {
+            writer->code_size++;
+        }
+    }
+    gif_lzw_write_code(writer, writer->end_code);
+    if (writer->bit_count > 0)
+        gif_lzw_write_byte(writer, (uint8_t)(writer->bit_buffer & 0xFFu));
+    gif_lzw_flush_block(writer);
+    if (!writer->failed && fputc(0, writer->file) == EOF) writer->failed = 1;
+    return writer->failed ? -1 : 0;
+}
+
+static uint16_t gif_frame_delay_cs(int frame_index, int fps) {
+    uint64_t start = ((uint64_t)frame_index * 100u + (uint64_t)fps / 2u)
+                   / (uint64_t)fps;
+    uint64_t end = ((uint64_t)(frame_index + 1) * 100u + (uint64_t)fps / 2u)
+                 / (uint64_t)fps;
+    return (uint16_t)(end - start);
+}
+
+static int gif_write_frame(FILE *file, const SymbolFrame *frame,
+                           int canvas_side, int fps, int frame_index,
+                           int minimum_code_size) {
+    uint16_t delay = gif_frame_delay_cs(frame_index, fps);
+    uint8_t graphic_control[8] = {
+        0x21, 0xF9, 0x04, 0x04,
+        (uint8_t)(delay & 0xFFu), (uint8_t)(delay >> 8), 0x00, 0x00
+    };
+    if (gif_write_bytes(file, graphic_control, sizeof(graphic_control)) != 0 ||
+        fputc(0x2C, file) == EOF ||
+        gif_write_u16(file, 0) != 0 || gif_write_u16(file, 0) != 0 ||
+        gif_write_u16(file, (uint16_t)canvas_side) != 0 ||
+        gif_write_u16(file, (uint16_t)canvas_side) != 0 ||
+        fputc(0, file) == EOF || fputc(minimum_code_size, file) == EOF) {
+        return -1;
+    }
+
+    int scale_x = canvas_side / frame->width;
+    int scale_y = canvas_side / frame->height;
+    int scale = scale_x < scale_y ? scale_x : scale_y;
+    if (scale < 1) return -1;
+    int rendered_w = frame->width * scale;
+    int rendered_h = frame->height * scale;
+    int offset_x = (canvas_side - rendered_w) / 2;
+    int offset_y = (canvas_side - rendered_h) / 2;
+
+    uint8_t *row = (uint8_t *)xcalloc((size_t)canvas_side, 1);
+    GifLzwWriter writer;
+    gif_lzw_start(&writer, file, minimum_code_size);
+    for (int y = 0; y < canvas_side && !writer.failed; y++) {
+        memset(row, 0, (size_t)canvas_side);
+        if (y >= offset_y && y < offset_y + rendered_h) {
+            int source_y = (y - offset_y) / scale;
+            for (int source_x = 0; source_x < frame->width; source_x++) {
+                uint8_t color = packed_raster_get(frame->pixels, frame->width,
+                                                  source_x, source_y);
+                if (color >= frame->pal_size) color = (uint8_t)(frame->pal_size - 1);
+                memset(row + offset_x + source_x * scale, color, (size_t)scale);
+            }
+        }
+        for (int x = 0; x < canvas_side && !writer.failed; x++)
+            gif_lzw_add_pixel(&writer, row[x], minimum_code_size);
+    }
+    free(row);
+    return gif_lzw_finish(&writer);
+}
+
+static int export_animated_gif(const char *path, const SymbolFrame *frames,
+                               int frame_count, int canvas_side, int fps) {
+    if (!path || *path == '\0' || !frames || frame_count < 1) return -1;
+    const SymbolFrame *first = &frames[0];
+    if (!first->palette || first->pal_size < 2 || first->pal_size > 8 ||
+        first->width < 1 || first->height < 1 ||
+        first->width > canvas_side || first->height > canvas_side) {
+        fprintf(stderr, "Error: GIF side %d is too small for the %dx%d symbol\n",
+                canvas_side, first->width, first->height);
+        return -1;
+    }
+    for (int i = 1; i < frame_count; i++) {
+        if (frames[i].width != first->width || frames[i].height != first->height ||
+            frames[i].pal_size != first->pal_size ||
+            frames[i].palette != first->palette) {
+            fprintf(stderr, "Error: GIF frames have inconsistent dimensions or palettes\n");
+            return -1;
+        }
+    }
+
+    int table_bits = 1;
+    while ((1 << table_bits) < first->pal_size) table_bits++;
+    int table_size = 1 << table_bits;
+    int minimum_code_size = table_bits < 2 ? 2 : table_bits;
+
+    size_t path_len = strlen(path);
+    if (path_len > SIZE_MAX - sizeof(".tmp.XXXXXX")) {
+        fprintf(stderr, "Error: GIF output path is too long\n");
+        return -1;
+    }
+    char *temporary_path = (char *)xmalloc(path_len + sizeof(".tmp.XXXXXX"));
+    snprintf(temporary_path, path_len + sizeof(".tmp.XXXXXX"),
+             "%s.tmp.XXXXXX", path);
+    int temporary_fd = mkstemp(temporary_path);
+    if (temporary_fd < 0) {
+        fprintf(stderr, "Error: cannot create temporary GIF for '%s': %s\n",
+                path, strerror(errno));
+        free(temporary_path);
+        return -1;
+    }
+
+    /* Match fopen("wb") permissions: preserve an existing destination's
+     * mode, or apply the process umask to 0666 for a new file. mkstemp's
+     * deliberately restrictive 0600 mode is only a safe starting point. */
+    struct stat destination_stat;
+    mode_t final_mode;
+    if (stat(path, &destination_stat) == 0) {
+        final_mode = destination_stat.st_mode & 0777;
+    } else {
+        mode_t process_mask = umask(0);
+        umask(process_mask);
+        final_mode = (mode_t)(0666 & ~process_mask);
+    }
+    if (fchmod(temporary_fd, final_mode) != 0) {
+        int saved_errno = errno;
+        close(temporary_fd);
+        unlink(temporary_path);
+        fprintf(stderr, "Error: cannot set GIF permissions for '%s': %s\n",
+                path, strerror(saved_errno));
+        free(temporary_path);
+        return -1;
+    }
+    FILE *file = fdopen(temporary_fd, "wb");
+    if (!file) {
+        int saved_errno = errno;
+        close(temporary_fd);
+        unlink(temporary_path);
+        fprintf(stderr, "Error: cannot open temporary GIF for '%s': %s\n",
+                path, strerror(saved_errno));
+        free(temporary_path);
+        return -1;
+    }
+
+    int failed = 0;
+    uint8_t packed = (uint8_t)(0x80u | ((table_bits - 1) << 4) |
+                               (table_bits - 1));
+    if (gif_write_bytes(file, "GIF89a", 6) != 0 ||
+        gif_write_u16(file, (uint16_t)canvas_side) != 0 ||
+        gif_write_u16(file, (uint16_t)canvas_side) != 0 ||
+        fputc(packed, file) == EOF || fputc(0, file) == EOF ||
+        fputc(0, file) == EOF) {
+        failed = 1;
+    }
+    for (int i = 0; !failed && i < table_size; i++) {
+        RGB color = i < first->pal_size ? first->palette[i] : first->palette[0];
+        uint8_t entry[3] = {color.r, color.g, color.b};
+        if (gif_write_bytes(file, entry, sizeof(entry)) != 0) failed = 1;
+    }
+
+    static const uint8_t loop_extension[] = {
+        0x21, 0xFF, 0x0B, 'N', 'E', 'T', 'S', 'C', 'A', 'P', 'E', '2', '.', '0',
+        0x03, 0x01, 0x00, 0x00, 0x00
+    };
+    if (!failed && gif_write_bytes(file, loop_extension,
+                                   sizeof(loop_extension)) != 0) failed = 1;
+
+    for (int i = 0; !failed && i < frame_count; i++) {
+        if (gif_write_frame(file, &frames[i], canvas_side, fps, i,
+                            minimum_code_size) != 0) {
+            failed = 1;
+        }
+    }
+    if (!failed && fputc(0x3B, file) == EOF) failed = 1;
+    if (fclose(file) != 0) failed = 1;
+    if (!failed && rename(temporary_path, path) != 0) {
+        fprintf(stderr, "Error: cannot install GIF '%s': %s\n",
+                path, strerror(errno));
+        failed = 1;
+    }
+    if (failed) {
+        fprintf(stderr, "Error: could not finish GIF '%s'\n", path);
+        unlink(temporary_path);
+        free(temporary_path);
+        return -1;
+    }
+    free(temporary_path);
+
+    int scale = canvas_side / first->width;
+    int rendered_side = first->width * scale;
+    printf("Exported %d-frame lossless GIF: %s (%dx%d canvas, %dx%d symbol, %d fps)\n",
+           frame_count, path, canvas_side, canvas_side,
+           rendered_side, rendered_side, fps);
+    fprintf(stderr,
+            "Warning: open the GIF full-screen, ideally at 100%% or an integer "
+            "zoom, and disable smooth image scaling.\n");
+    return 0;
+}
+
+static int paths_refer_to_same_file(const char *first, const char *second) {
+    struct stat first_stat;
+    struct stat second_stat;
+    if (stat(first, &first_stat) != 0 || stat(second, &second_stat) != 0)
+        return 0;
+    return first_stat.st_dev == second_stat.st_dev &&
+           first_stat.st_ino == second_stat.st_ino;
+}
+
+/* =========================================================================
  * SDL2 display
  * ========================================================================= */
 
@@ -1642,8 +2002,9 @@ static void print_usage(const char *prog) {
 "  encodes each shard as an HCC2D symbol or a standard QR Code (shard size\n"
 "  is derived from the maximum available payload for the chosen mode/EC\n"
 "  level/version), then streams all symbols in an SDL2 window in an\n"
-"  infinite loop. Input files may be up to 2 MiB (2,097,152 bytes).\n"
-"  Press ESC or close the window to exit.\n\n"
+"  infinite loop or exports one lossless animated GIF cycle. Input files\n"
+"  may be up to 2 MiB (2,097,152 bytes). Press ESC or close the SDL\n"
+"  window to exit.\n\n"
 "Companion app:\n"
 "  To receive this stream and recover the file, point a smartphone camera at\n"
 "  the window. HCC2DST v2 output requires HCC2D Decoder version 1.2.4 or later:\n"
@@ -1662,9 +2023,16 @@ static void print_usage(const char *prog) {
 "  --version N              symbol version 1-40; higher versions carry more\n"
 "                           data per symbol but render smaller modules.\n"
 "                           (default: 33)\n"
-"  --fps N                  display frame rate: 10, 12, 15, or 20\n"
-"                           symbols per second; each divides evenly into\n"
-"                           a commonly used 60 Hz refresh rate (default: 12)\n"
+"  --fps N                  display or exported GIF frame rate: 10, 12, 15,\n"
+"                           or 20 symbols per second; each divides evenly\n"
+"                           into a commonly used 60 Hz refresh rate\n"
+"                           (default: 12)\n"
+"  --export-gif FILE        export one complete, infinitely looping GIF89a\n"
+"                           sequence and exit without opening an SDL window.\n"
+"  --gif-side N             GIF canvas width and height in pixels, from 1\n"
+"                           to 8192 (default: 1080). The symbol is centred\n"
+"                           and scaled only by an integer factor. Valid only\n"
+"                           together with --export-gif.\n"
 "  --display N              SDL display index to use for window placement\n"
 "                           and size calculation; N must be non-negative\n"
 "                           (default: 0)\n"
@@ -1695,8 +2063,9 @@ static void print_usage(const char *prog) {
 "  %s myfile.pdf\n"
 "  %s --mode hcc2d8 --ec-level L --version 40 --fps 15 myfile.pdf\n"
 "  %s --mode qr --version 10 myfile.pdf\n"
+"  %s --fps 10 --export-gif stream.gif myfile.pdf\n"
 "  %s --max-data-shards 100 --parity-ratio 0.20 myfile.pdf\n",
-        prog, prog, prog, prog);
+        prog, prog, prog, prog, prog);
 }
 
 int main(int argc, char **argv) {
@@ -1710,6 +2079,9 @@ int main(int argc, char **argv) {
     int quiet_zone  = DEFAULT_QUIET_ZONE;
     int show_titlebar = 1;
     const char *palette_rgb_opt = NULL;
+    const char *export_gif_path = NULL;
+    int gif_side = DEFAULT_GIF_SIDE;
+    int gif_side_was_set = 0;
 
     static struct option long_opts[] = {
         {"mode",       required_argument, 0, 'm'},
@@ -1722,6 +2094,8 @@ int main(int argc, char **argv) {
         {"quiet-zone", required_argument, 0, 'z'},
         {"no-titlebar", no_argument,      0, 't'},
         {"palette-rgb", required_argument, 0, 'P'},
+        {"export-gif", required_argument, 0, 'G'},
+        {"gif-side",   required_argument, 0, 'S'},
         {"help",       no_argument,       0, 'h'},
         {0, 0, 0, 0}
     };
@@ -1785,6 +2159,20 @@ int main(int argc, char **argv) {
             case 'P':
                 palette_rgb_opt = optarg;
                 break;
+            case 'G':
+                if (*optarg == '\0') {
+                    fprintf(stderr, "Error: --export-gif requires a non-empty filename\n");
+                    return 1;
+                }
+                export_gif_path = optarg;
+                break;
+            case 'S':
+                if (parse_int_option("gif-side", optarg, 1, MAX_GIF_SIDE,
+                                     &gif_side) != 0) {
+                    return 1;
+                }
+                gif_side_was_set = 1;
+                break;
             case 'h':
                 print_usage(argv[0]);
                 return 0;
@@ -1792,6 +2180,11 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "Error: unknown option. Use --help.\n");
                 return 1;
         }
+    }
+
+    if (gif_side_was_set && !export_gif_path) {
+        fprintf(stderr, "Error: --gif-side requires --export-gif\n");
+        return 1;
     }
 
     if (optind >= argc) {
@@ -1804,9 +2197,24 @@ int main(int argc, char **argv) {
         return 1;
     }
     const char *input_path = argv[optind];
+    if (export_gif_path && paths_refer_to_same_file(input_path, export_gif_path)) {
+        fprintf(stderr, "Error: GIF output must not overwrite the input file\n");
+        return 1;
+    }
 
     const char *enc_mode = mode_opt ? mode_opt : "hcc2d8";
     int pal_size = palette_size_for_mode(enc_mode);
+
+    if (export_gif_path) {
+        int symbol_side = 17 + 4 * version + quiet_zone * 2;
+        if (strcmp(enc_mode, "qr") != 0) symbol_side += 2;
+        if (gif_side < symbol_side) {
+            fprintf(stderr,
+                    "Error: GIF side %d is too small for the %dx%d symbol\n",
+                    gif_side, symbol_side, symbol_side);
+            return 1;
+        }
+    }
 
     if (palette_rgb_opt && pal_size == 2) {
         fprintf(stderr, "Error: --palette-rgb is supported for HCC2D4/8 only\n");
@@ -2105,52 +2513,59 @@ int main(int argc, char **argv) {
     /* Allocate SymbolFrame array */
     SymbolFrame *frames = (SymbolFrame *)xcalloc(n_symbols_total, sizeof(SymbolFrame));
 
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
-        fprintf(stderr, "SDL_Init error: %s\n", SDL_GetError());
-        free(frames);
-        free_group_storage(group_data_shards, group_parity_shards, n_groups);
-        free(groups);
-        return 1;
-    }
+    int display_size = 0;
+    int window_x = 0;
+    int window_y = 0;
+    int sdl_initialized = 0;
+    if (!export_gif_path) {
+        if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+            fprintf(stderr, "SDL_Init error: %s\n", SDL_GetError());
+            free(frames);
+            free_group_storage(group_data_shards, group_parity_shards, n_groups);
+            free(groups);
+            return 1;
+        }
+        sdl_initialized = 1;
 
-    int num_displays = SDL_GetNumVideoDisplays();
-    if (num_displays <= 0) {
-        fprintf(stderr, "SDL_GetNumVideoDisplays error: %s\n", SDL_GetError());
-        free(frames);
-        free_group_storage(group_data_shards, group_parity_shards, n_groups);
-        free(groups);
-        SDL_Quit();
-        return 1;
-    }
-    if (display_index >= num_displays) {
-        fprintf(stderr, "Error: display index %d out of range; %d display(s) available\n",
-                display_index, num_displays);
-        free(frames);
-        free_group_storage(group_data_shards, group_parity_shards, n_groups);
-        free(groups);
-        SDL_Quit();
-        return 1;
-    }
+        int num_displays = SDL_GetNumVideoDisplays();
+        if (num_displays <= 0) {
+            fprintf(stderr, "SDL_GetNumVideoDisplays error: %s\n", SDL_GetError());
+            free(frames);
+            free_group_storage(group_data_shards, group_parity_shards, n_groups);
+            free(groups);
+            SDL_Quit();
+            return 1;
+        }
+        if (display_index >= num_displays) {
+            fprintf(stderr, "Error: display index %d out of range; %d display(s) available\n",
+                    display_index, num_displays);
+            free(frames);
+            free_group_storage(group_data_shards, group_parity_shards, n_groups);
+            free(groups);
+            SDL_Quit();
+            return 1;
+        }
 
-    SDL_DisplayMode dm;
-    SDL_Rect display_bounds;
-    int screen_w = 2560, screen_h = 1440; /* fallback */
-    if (SDL_GetCurrentDisplayMode(display_index, &dm) == 0) {
-        screen_w = dm.w;
-        screen_h = dm.h;
-    }
-    if (SDL_GetDisplayBounds(display_index, &display_bounds) != 0) {
-        display_bounds.x = 0;
-        display_bounds.y = 0;
-        display_bounds.w = screen_w;
-        display_bounds.h = screen_h;
-    }
+        SDL_DisplayMode dm;
+        SDL_Rect display_bounds;
+        int screen_w = 2560, screen_h = 1440; /* fallback */
+        if (SDL_GetCurrentDisplayMode(display_index, &dm) == 0) {
+            screen_w = dm.w;
+            screen_h = dm.h;
+        }
+        if (SDL_GetDisplayBounds(display_index, &display_bounds) != 0) {
+            display_bounds.x = 0;
+            display_bounds.y = 0;
+            display_bounds.w = screen_w;
+            display_bounds.h = screen_h;
+        }
 
-    int display_size = display_bounds.w < display_bounds.h
+        display_size = display_bounds.w < display_bounds.h
                      ? display_bounds.w : display_bounds.h;
-    if (display_size < 1) display_size = 1;
-    int window_x = display_bounds.x + (display_bounds.w - display_size) / 2;
-    int window_y = display_bounds.y + (display_bounds.h - display_size) / 2;
+        if (display_size < 1) display_size = 1;
+        window_x = display_bounds.x + (display_bounds.w - display_size) / 2;
+        window_y = display_bounds.y + (display_bounds.h - display_size) / 2;
+    }
 
     int symbols_encoded = 0;
     int min_symbol_version = 999;
@@ -2275,8 +2690,16 @@ int main(int argc, char **argv) {
                     symbols_encoded, n_symbols_total);
         }
         free_symbol_frames(frames, symbols_encoded);
-        SDL_Quit();
+        if (sdl_initialized) SDL_Quit();
         return 1;
+    }
+
+    if (export_gif_path) {
+        int gif_status = export_animated_gif(export_gif_path, frames,
+                                             symbols_encoded, gif_side,
+                                             display_fps);
+        free_symbol_frames(frames, symbols_encoded);
+        return gif_status == 0 ? 0 : 1;
     }
 
     Uint32 window_flags = SDL_WINDOW_SHOWN;

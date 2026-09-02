@@ -8,7 +8,8 @@ hcc2d_streamer \- transfer files through streams of QR or HCC2D symbols
 .SH DESCRIPTION
 \fBhcc2d_streamer\fR reads a file, optionally compresses it, splits it into
 dynamic Reed-Solomon erasure groups, and displays the resulting shards as a
-repeating sequence of QR, HCC2D4, or HCC2D8 symbols in an SDL2 window.
+repeating sequence of QR, HCC2D4, or HCC2D8 symbols in an SDL2 window, or
+exports one complete sequence as a lossless animated GIF.
 The HCC2D Decoder companion app captures the sequence and reconstructs the
 original file.
 .PP
@@ -33,9 +34,25 @@ Set the error-correction level inside each symbol. The default is \fBM\fR.
 Set the fixed symbol version from 1 to 40. The default is 33.
 .TP
 \fB\-\-fps\fR \fIN\fR
-Set the display rate to 10, 12, 15, or 20 symbols per second. The default is
-12. On a 60 Hz display, these rates show each symbol for exactly 6, 5, 4, or
-3 refresh cycles, respectively.
+Set the SDL display or exported GIF rate to 10, 12, 15, or 20 symbols per
+second. The default is 12. On a 60 Hz display, these rates show each symbol for
+exactly 6, 5, 4, or 3 refresh cycles, respectively.
+.TP
+\fB\-\-export-gif\fR \fIFILE\fR
+Export one complete interleaved sequence as a lossless GIF89a animation, set it
+to loop indefinitely, and exit without opening an SDL window. Every generated
+data and parity frame is included. GIF viewers control actual playback timing.
+.TP
+\fB\-\-gif-side\fR \fIN\fR
+Set the square GIF canvas width and height from 1 to 8192 pixels. The default is
+1080. The symbol is centred and enlarged only by the largest integer scale that
+fits, so modules are not interpolated or deformed. This option requires
+\fB\-\-export-gif\fR.
+.PP
+.B Warning:
+Open an exported GIF full-screen, ideally at 100% or an integer zoom, and
+disable smooth image scaling. Interpolated resizing can blur module edges and
+reduce decoding reliability.
 .TP
 \fB\-\-display\fR \fIN\fR
 Select the SDL display index used for window placement and size calculation.
@@ -89,6 +106,12 @@ Stream standard QR Codes:
 .B hcc2d_streamer \-\-mode qr \-\-ec-level L \-\-version 20 document.pdf
 .br
 Theoretical symbol-layer rate: approximately 0.08 Mbps.
+.TP
+Export a complete 1080 by 1080 lossless GIF at 10 symbols per second:
+.B hcc2d_streamer \-\-fps 10 \-\-export-gif document-stream.gif document.pdf
+.TP
+Export a smaller GIF while preserving integer-sized modules:
+.B hcc2d_streamer \-\-fps 12 \-\-gif-side 640 \-\-export-gif document-stream.gif document.pdf
 .PP
 These are theoretical symbol-layer rates: the data-codeword capacity after
 accounting for the internal QR/HCC2D Reed-Solomon overhead, multiplied by the

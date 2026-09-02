@@ -51,6 +51,8 @@ grep -q 'Version 0.9.0' <<<"${HELP}"
 grep -q -- '--mode {qr,hcc2d4,hcc2d8}' <<<"${HELP}"
 grep -q -- '--max-data-shards N' <<<"${HELP}"
 grep -q -- '--parity-ratio R' <<<"${HELP}"
+grep -q -- '--export-gif FILE' <<<"${HELP}"
+grep -q -- '--gif-side N' <<<"${HELP}"
 grep -q '2 MiB (2,097,152 bytes)' <<<"${HELP}"
 grep -q 'HCC2DST v2 output' <<<"${HELP}"
 grep -q 'HCC2D Decoder version 1.2.4 or later' <<<"${HELP}"
@@ -78,6 +80,9 @@ expect_rejected experimental --experimental --mode hcc2d8 /dev/null
 expect_rejected invalid_integer --version 12x /dev/null
 expect_rejected integer_overflow --version 999999999999999999999 /dev/null
 expect_rejected unsupported_fps --fps 11 /dev/null
+expect_rejected gif_side_without_export --gif-side 1080 /dev/null
+expect_rejected gif_side_too_large --export-gif out.gif --gif-side 8193 /dev/null
+expect_rejected empty_gif_filename --export-gif '' /dev/null
 expect_rejected obsolete_colors --colors 8 /dev/null
 expect_rejected obsolete_k_max --k-max 100 /dev/null
 expect_rejected obsolete_parity_num --parity-num 70 /dev/null
@@ -312,6 +317,247 @@ static int check_filename_handling(void)
     return utf8_is_valid(terminated) ? 0 : 1;
 }
 
+static int read_gif_code(const uint8_t *data, size_t size, size_t *bit_offset,
+                         int code_size, int *code_out)
+{
+    if (*bit_offset + (size_t)code_size > size * 8u) return 1;
+    uint32_t value = 0;
+    for (int bit = 0; bit < code_size; bit++) {
+        size_t absolute = *bit_offset + (size_t)bit;
+        value |= (uint32_t)((data[absolute / 8u] >> (absolute % 8u)) & 1u)
+               << bit;
+    }
+    *bit_offset += (size_t)code_size;
+    *code_out = (int)value;
+    return 0;
+}
+
+static int decode_gif_lzw(const uint8_t *data, size_t size,
+                          int minimum_code_size, uint8_t *output,
+                          size_t output_size)
+{
+    uint16_t prefixes[GIF_LZW_MAX_CODES] = {0};
+    uint8_t suffixes[GIF_LZW_MAX_CODES] = {0};
+    uint8_t stack[GIF_LZW_MAX_CODES];
+    int clear_code = 1 << minimum_code_size;
+    int end_code = clear_code + 1;
+    int next_code = end_code + 1;
+    int code_size = minimum_code_size + 1;
+    int previous = -1;
+    size_t bit_offset = 0;
+    size_t output_offset = 0;
+
+    for (int i = 0; i < clear_code; i++) suffixes[i] = (uint8_t)i;
+    for (;;) {
+        int code = 0;
+        if (read_gif_code(data, size, &bit_offset, code_size, &code) != 0)
+            return 1;
+        if (code == clear_code) {
+            next_code = end_code + 1;
+            code_size = minimum_code_size + 1;
+            previous = -1;
+            continue;
+        }
+        if (code == end_code) break;
+        if (code < 0 || code >= GIF_LZW_MAX_CODES) return 1;
+
+        int incoming = code;
+        int special_case = code == next_code;
+        if (code > next_code || (special_case && previous < 0)) return 1;
+        if (special_case) code = previous;
+
+        size_t stack_size = 0;
+        while (code >= clear_code) {
+            if (code >= next_code || stack_size == sizeof(stack)) return 1;
+            stack[stack_size++] = suffixes[code];
+            code = prefixes[code];
+        }
+        uint8_t first = suffixes[code];
+        if (stack_size == sizeof(stack)) return 1;
+        stack[stack_size++] = first;
+        while (stack_size > 0) {
+            if (output_offset >= output_size) return 1;
+            output[output_offset++] = stack[--stack_size];
+        }
+        if (special_case) {
+            if (output_offset >= output_size) return 1;
+            output[output_offset++] = first;
+        }
+
+        if (previous >= 0 && next_code < GIF_LZW_MAX_CODES) {
+            prefixes[next_code] = (uint16_t)previous;
+            suffixes[next_code] = first;
+            next_code++;
+            if (next_code == (1 << code_size) && code_size < 12)
+                code_size++;
+        }
+        previous = incoming;
+    }
+    return output_offset == output_size ? 0 : 1;
+}
+
+static int check_gif_lzw_dictionary_reset(void)
+{
+    enum { pixel_count = 100000 };
+    uint8_t *pixels = xmalloc(pixel_count);
+    uint8_t *decoded = xmalloc(pixel_count);
+    uint8_t *compressed = xmalloc(pixel_count * 2u);
+    uint32_t state = 0xC001D00Du;
+    for (size_t i = 0; i < pixel_count; i++) {
+        state = state * 1664525u + 1013904223u;
+        pixels[i] = (uint8_t)((state >> 16) & 7u);
+    }
+
+    FILE *file = tmpfile();
+    if (!file) return 1;
+    GifLzwWriter writer;
+    gif_lzw_start(&writer, file, 3);
+    for (size_t i = 0; i < pixel_count; i++)
+        gif_lzw_add_pixel(&writer, pixels[i], 3);
+    if (gif_lzw_finish(&writer) != 0 || fflush(file) != 0 ||
+        fseeko(file, 0, SEEK_SET) != 0) {
+        fclose(file);
+        free(compressed);
+        free(decoded);
+        free(pixels);
+        return 1;
+    }
+
+    size_t compressed_size = 0;
+    for (;;) {
+        int block_size = fgetc(file);
+        if (block_size == EOF) return 1;
+        if (block_size == 0) break;
+        if (compressed_size + (size_t)block_size > pixel_count * 2u ||
+            fread(compressed + compressed_size, 1, (size_t)block_size, file) !=
+                (size_t)block_size) {
+            return 1;
+        }
+        compressed_size += (size_t)block_size;
+    }
+    if (fclose(file) != 0) return 1;
+
+    int result = decode_gif_lzw(compressed, compressed_size, 3,
+                                decoded, pixel_count);
+    if (result == 0 && memcmp(decoded, pixels, pixel_count) != 0) result = 1;
+    free(compressed);
+    free(decoded);
+    free(pixels);
+    return result;
+}
+
+static int check_gif_export(const char *path)
+{
+    static const RGB palette[4] = {
+        {0, 0, 0}, {220, 0, 0}, {0, 200, 220}, {255, 255, 255}
+    };
+    SymbolFrame frames[2] = {{0}};
+    for (int i = 0; i < 2; i++) {
+        frames[i].width = 3;
+        frames[i].height = 3;
+        frames[i].pal_size = 4;
+        frames[i].palette = palette;
+        frames[i].pixels = xcalloc(5, 1);
+    }
+    static const uint8_t source_pixels[2][9] = {
+        {0, 1, 2, 3, 0, 1, 2, 3, 0},
+        {3, 2, 1, 0, 3, 2, 1, 0, 3}
+    };
+    for (int frame = 0; frame < 2; frame++)
+        for (int y = 0; y < 3; y++)
+            for (int x = 0; x < 3; x++)
+                packed_raster_set(frames[frame].pixels, 3, x, y,
+                                  source_pixels[frame][y * 3 + x]);
+
+    int result = export_animated_gif(path, frames, 2, 8, 12);
+    free(frames[0].pixels);
+    free(frames[1].pixels);
+    if (result != 0) return 1;
+
+    FILE *file = fopen(path, "rb");
+    if (!file || fseeko(file, 0, SEEK_END) != 0) return 1;
+    off_t file_size = ftello(file);
+    if (file_size < 1 || fseeko(file, 0, SEEK_SET) != 0) return 1;
+    uint8_t *gif = xmalloc((size_t)file_size);
+    if (fread(gif, 1, (size_t)file_size, file) != (size_t)file_size ||
+        fclose(file) != 0) {
+        free(gif);
+        return 1;
+    }
+
+    size_t pos = 0;
+#define REQUIRE_GIF(condition) do { if (!(condition)) { free(gif); return 1; } } while (0)
+    REQUIRE_GIF((size_t)file_size >= 44u && memcmp(gif, "GIF89a", 6) == 0);
+    REQUIRE_GIF(get_le16(gif + 6) == 8 && get_le16(gif + 8) == 8);
+    REQUIRE_GIF((gif[10] & 0x80u) != 0 && (gif[10] & 0x07u) == 1u);
+    static const uint8_t expected_palette[12] = {
+        0, 0, 0, 220, 0, 0, 0, 200, 220, 255, 255, 255
+    };
+    REQUIRE_GIF(memcmp(gif + 13, expected_palette, sizeof(expected_palette)) == 0);
+    pos = 25;
+    static const uint8_t loop_extension[19] = {
+        0x21, 0xFF, 0x0B, 'N', 'E', 'T', 'S', 'C', 'A', 'P', 'E', '2', '.', '0',
+        0x03, 0x01, 0x00, 0x00, 0x00
+    };
+    REQUIRE_GIF(memcmp(gif + pos, loop_extension, sizeof(loop_extension)) == 0);
+    pos += sizeof(loop_extension);
+
+    for (int frame = 0; frame < 2; frame++) {
+        REQUIRE_GIF(pos + 19u < (size_t)file_size);
+        uint16_t expected_delay = frame == 0 ? 8 : 9;
+        REQUIRE_GIF(gif[pos] == 0x21 && gif[pos + 1] == 0xF9 &&
+                    gif[pos + 2] == 4 && get_le16(gif + pos + 4) == expected_delay);
+        pos += 8;
+        REQUIRE_GIF(gif[pos] == 0x2C && get_le16(gif + pos + 5) == 8 &&
+                    get_le16(gif + pos + 7) == 8 && gif[pos + 9] == 0);
+        pos += 10;
+        int minimum_code_size = gif[pos++];
+        REQUIRE_GIF(minimum_code_size == 2);
+
+        uint8_t compressed[4096];
+        size_t compressed_size = 0;
+        for (;;) {
+            REQUIRE_GIF(pos < (size_t)file_size);
+            size_t block_size = gif[pos++];
+            if (block_size == 0) break;
+            REQUIRE_GIF(pos + block_size <= (size_t)file_size &&
+                        compressed_size + block_size <= sizeof(compressed));
+            memcpy(compressed + compressed_size, gif + pos, block_size);
+            compressed_size += block_size;
+            pos += block_size;
+        }
+
+        uint8_t decoded[64];
+        REQUIRE_GIF(decode_gif_lzw(compressed, compressed_size,
+                                   minimum_code_size, decoded,
+                                   sizeof(decoded)) == 0);
+        for (int y = 0; y < 8; y++) {
+            for (int x = 0; x < 8; x++) {
+                uint8_t expected = 0;
+                if (x >= 1 && x < 7 && y >= 1 && y < 7) {
+                    expected = source_pixels[frame]
+                        [((y - 1) / 2) * 3 + (x - 1) / 2];
+                }
+                REQUIRE_GIF(decoded[y * 8 + x] == expected);
+            }
+        }
+    }
+    REQUIRE_GIF(pos + 1u == (size_t)file_size && gif[pos] == 0x3B);
+    free(gif);
+#undef REQUIRE_GIF
+
+    if (gif_frame_delay_cs(0, 10) != 10 ||
+        gif_frame_delay_cs(0, 20) != 5 ||
+        gif_frame_delay_cs(0, 12) != 8 ||
+        gif_frame_delay_cs(1, 12) != 9 ||
+        gif_frame_delay_cs(0, 15) != 7 ||
+        gif_frame_delay_cs(1, 15) != 6 ||
+        gif_frame_delay_cs(2, 15) != 7) {
+        return 1;
+    }
+    return 0;
+}
+
 static int invert_gf_matrix(uint8_t input[4][4], uint8_t inverse[4][4])
 {
     uint8_t augmented[4][8] = {{0}};
@@ -404,8 +650,9 @@ static int check_outer_erasure_recovery(void)
     return subset_count == 35 ? 0 : 1;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    if (argc != 2) return 1;
     gf256_init();
     static const char *modes[] = {"qr", "hcc2d4", "hcc2d8"};
     static const char levels[] = {'L', 'M', 'Q', 'H'};
@@ -419,6 +666,8 @@ int main(void)
     if (check_parity_ratio() != 0) return 1;
     if (check_filename_handling() != 0) return 1;
     if (check_outer_erasure_recovery() != 0) return 1;
+    if (check_gif_export(argv[1]) != 0) return 1;
+    if (check_gif_lzw_dictionary_reset() != 0) return 1;
 
     g_shard_data_bytes = 32;
     uint8_t data[64] = {0};
@@ -434,7 +683,7 @@ HARNESS="${TEST_DIR}/encode_harness"
 
 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
 UBSAN_OPTIONS=halt_on_error=1 \
-    "${HARNESS}"
+    "${HARNESS}" "${TEST_DIR}/unit.gif"
 
 cat >"${TEST_DIR}/main_harness.c" <<'EOF'
 #define main hcc2d_streamer_cli_main
@@ -475,6 +724,46 @@ MAIN_HARNESS="${TEST_DIR}/main_harness"
     "${SDL_LIBS[@]}" -lz -lm
 
 printf 'HCC2D Streamer main-path smoke test\n' >"${TEST_DIR}/input.txt"
+cp "${TEST_DIR}/input.txt" "${TEST_DIR}/input-before.txt"
+expect_rejected gif_overwrites_input --export-gif "${TEST_DIR}/input.txt" \
+    "${TEST_DIR}/input.txt"
+grep -q 'must not overwrite the input file' "${TEST_DIR}/gif_overwrites_input.err"
+cmp -s "${TEST_DIR}/input.txt" "${TEST_DIR}/input-before.txt"
+
+expect_rejected gif_side_too_small --gif-side 100 \
+    --export-gif "${TEST_DIR}/too-small.gif" "${TEST_DIR}/input.txt"
+grep -q 'too small for the 159x159 symbol' "${TEST_DIR}/gif_side_too_small.err"
+test ! -e "${TEST_DIR}/too-small.gif"
+
+mkdir "${TEST_DIR}/output-directory"
+expect_rejected gif_target_is_directory --gif-side 200 \
+    --export-gif "${TEST_DIR}/output-directory" "${TEST_DIR}/input.txt"
+grep -q 'cannot install GIF' "${TEST_DIR}/gif_target_is_directory.err"
+test -d "${TEST_DIR}/output-directory"
+if compgen -G "${TEST_DIR}/output-directory.tmp.*" >/dev/null; then
+    echo 'Error: failed GIF export left a temporary file behind' >&2
+    exit 1
+fi
+
+printf 'old output\n' >"${TEST_DIR}/main.gif"
+chmod 0640 "${TEST_DIR}/main.gif"
+ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+UBSAN_OPTIONS=halt_on_error=1 \
+    "${STREAMER}" --fps 12 --gif-side 200 \
+    --export-gif "${TEST_DIR}/main.gif" "${TEST_DIR}/input.txt" \
+    >"${TEST_DIR}/gif-main.out" 2>"${TEST_DIR}/gif-main.err"
+grep -q 'Exported 2-frame lossless GIF:' "${TEST_DIR}/gif-main.out"
+grep -q '(200x200 canvas, 159x159 symbol, 12 fps)' "${TEST_DIR}/gif-main.out"
+test -s "${TEST_DIR}/main.gif"
+test "$(head -c 6 "${TEST_DIR}/main.gif")" = 'GIF89a'
+test "$(stat -c '%a' "${TEST_DIR}/main.gif")" = '640'
+if compgen -G "${TEST_DIR}/main.gif.tmp.*" >/dev/null; then
+    echo 'Error: successful GIF export left a temporary file behind' >&2
+    exit 1
+fi
+grep -Fqx 'Warning: open the GIF full-screen, ideally at 100% or an integer zoom, and disable smooth image scaling.' \
+    "${TEST_DIR}/gif-main.err"
+
 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
 UBSAN_OPTIONS=halt_on_error=1 \
     "${MAIN_HARNESS}" "${TEST_DIR}/input.txt" \
@@ -493,5 +782,5 @@ grep -q 'Symbol: hcc2d8, EC M, version 33, display fps: 12' \
 grep -q 'Ready. Streaming at 12 fps.' "${TEST_DIR}/max-size.out"
 test ! -s "${TEST_DIR}/max-size.err"
 
-printf 'PASS: build=1 help=1 invalid_inputs=18 supported_fps=4 boundary_encodes=480 protocol=1 option_model=1 parity_ratio=1 palette=1 filenames=1 erasure_subsets=35 main=1 max_input=1 sanitizer=%s\n' \
+printf 'PASS: build=1 help=1 invalid_inputs=24 supported_fps=4 boundary_encodes=480 protocol=1 option_model=1 parity_ratio=1 palette=1 filenames=1 erasure_subsets=35 gif_lzw=1 gif_lzw_reset=1 gif_atomic=1 gif_main=1 main=1 max_input=1 sanitizer=%s\n' \
     "${SANITIZE:-0}"

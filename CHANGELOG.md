@@ -16,6 +16,11 @@
 - Limited display rates to 10, 12, 15, and 20 symbols per second for regular
   cadence on commonly used 60 Hz displays.
 - Streamed symbols from memory through SDL2 without temporary image files.
+- Added lossless animated GIF89a export with LZW compression, complete
+  infinitely looping sequences, requested frame timing, and integer-only module
+  scaling inside a configurable square canvas.
+- Added an explicit full-screen/no-smoothing playback warning and atomic GIF
+  output replacement so failed exports do not overwrite an existing result.
 - Added a Makefile, regression checks, a manual page, and Debian/Ubuntu
   packaging.
 - Excluded experimental HCC2D16 and experimental version 45.
