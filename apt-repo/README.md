@@ -41,7 +41,7 @@ only for the publishing command:
 ```bash
 GNUPGHOME=/path/to/private/apt-gpg \
   apt-repo/scripts/publish.sh --distribution noble \
-  --deb ../hcc2d-streamer_0.9.0-1_amd64.deb
+  --deb ../hcc2d-streamer_0.9.0-2_amd64.deb
 ```
 
 The publishing script passes the selected key to GnuPG; it never copies
@@ -69,7 +69,7 @@ Publish for Ubuntu 24.04:
 ```bash
 apt-repo/scripts/publish.sh \
   --distribution noble \
-  --deb ../hcc2d-streamer_0.9.0-1_amd64.deb
+  --deb ../hcc2d-streamer_0.9.0-2_amd64.deb
 ```
 
 Generate unsigned metadata for a dry run:
@@ -77,7 +77,7 @@ Generate unsigned metadata for a dry run:
 ```bash
 apt-repo/scripts/publish.sh \
   --distribution noble \
-  --deb ../hcc2d-streamer_0.9.0-1_amd64.deb \
+  --deb ../hcc2d-streamer_0.9.0-2_amd64.deb \
   --skip-signing
 ```
 

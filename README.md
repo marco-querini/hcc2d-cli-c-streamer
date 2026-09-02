@@ -106,7 +106,7 @@ dpkg-buildpackage -us -uc -b
 The `.deb` is written to the parent directory. Install it with:
 
 ```bash
-sudo apt install ../hcc2d-streamer_0.9.0-1_amd64.deb
+sudo apt install ../hcc2d-streamer_0.9.0-2_amd64.deb
 ```
 
 The package installs:

@@ -1,7 +1,13 @@
+hcc2d-streamer (0.9.0-2) unstable; urgency=medium
+
+  * Add lossless animated GIF export with integer module scaling.
+  * Add atomic GIF output replacement and full-screen playback guidance.
+
+ -- Marco Querini <info@hcc2d.com>  Wed, 02 Sep 2026 12:11:22 +0200
+
 hcc2d-streamer (0.9.0-1) unstable; urgency=medium
 
   * Initial Debian packaging release of the single-file C Streamer.
   * Support QR, HCC2D4, and HCC2D8 symbol streams.
-  * Add lossless animated GIF export with integer module scaling.
 
  -- Marco Querini <info@hcc2d.com>  Sun, 30 Aug 2026 12:00:00 +0200
