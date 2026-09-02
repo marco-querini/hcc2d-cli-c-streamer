@@ -228,3 +228,7 @@ Apache License 2.0. See [`LICENSE`](LICENSE).
 
 This software is provided without warranty. See the license and the notice in
 the source header for the applicable terms.
+
+## Notice
+
+The views expressed in connection with the HCC2D Code Specification, HCC2D applications distributed through app stores, and HCC2D source code released as open source are solely those of the author and do not necessarily reflect the official position of any institution, organization, or employer with which the author is or has been affiliated.
