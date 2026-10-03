@@ -25,6 +25,12 @@ if [[ ! -f "${SOURCE}" ]]; then
     exit 1
 fi
 
+grep -q 'HCC2D Streamer CLI is a separate open-source project' "${ROOT_DIR}/TERMS.md"
+grep -q 'governed by the \[Apache License 2.0\]' "${ROOT_DIR}/TERMS.md"
+grep -q '## 6. Photosensitivity and Visual Streaming' "${ROOT_DIR}/TERMS.md"
+grep -q 'Users with known or suspected photosensitivity should avoid' "${ROOT_DIR}/TERMS.md"
+grep -q 'See TERMS.md or https://hcc2d.com/en/terms' "${SOURCE}"
+
 SDL_CFLAGS_TEXT="$(pkg-config --cflags sdl2)"
 SDL_LIBS_TEXT="$(pkg-config --libs sdl2)"
 read -r -a SDL_CFLAGS <<<"${SDL_CFLAGS_TEXT}"
@@ -53,6 +59,9 @@ grep -q -- '--max-data-shards N' <<<"${HELP}"
 grep -q -- '--parity-ratio R' <<<"${HELP}"
 grep -q -- '--export-gif FILE' <<<"${HELP}"
 grep -q -- '--gif-side N' <<<"${HELP}"
+grep -q 'frame rate: 3, 10, 12,' <<<"${HELP}"
+grep -q -- 'if proceeding, use --fps 3 to' <<<"${HELP}"
+grep -q -- 'reduce visual changes. This does not guarantee' <<<"${HELP}"
 grep -q '2 MiB (2,097,152 bytes)' <<<"${HELP}"
 grep -q 'HCC2DST v2 output' <<<"${HELP}"
 grep -q 'HCC2D Decoder version 1.2.4 or later' <<<"${HELP}"
@@ -96,7 +105,7 @@ expect_rejected parity_precision --parity-ratio 0.1234567 /dev/null
 expect_rejected extra_argument /dev/null unexpected
 expect_rejected empty_file /dev/null
 
-for supported_fps in 10 12 15 20; do
+for supported_fps in 3 10 12 15 20; do
     name="supported_fps_${supported_fps}"
     expect_rejected "${name}" --fps "${supported_fps}" /dev/null
     grep -Fqx 'Error: input file is empty' "${TEST_DIR}/${name}.err"
@@ -548,6 +557,9 @@ static int check_gif_export(const char *path)
 
     if (gif_frame_delay_cs(0, 10) != 10 ||
         gif_frame_delay_cs(0, 20) != 5 ||
+        gif_frame_delay_cs(0, 3) != 33 ||
+        gif_frame_delay_cs(1, 3) != 34 ||
+        gif_frame_delay_cs(2, 3) != 33 ||
         gif_frame_delay_cs(0, 12) != 8 ||
         gif_frame_delay_cs(1, 12) != 9 ||
         gif_frame_delay_cs(0, 15) != 7 ||
@@ -701,7 +713,7 @@ static Uint32 request_quit(Uint32 interval, void *parameter)
 
 int main(int argc, char **argv)
 {
-    if (argc != 2) return 2;
+    if (argc != 2 && argc != 3) return 2;
     if (SDL_setenv("SDL_VIDEODRIVER", "dummy", 1) != 0) return 2;
     if (SDL_setenv("SDL_RENDER_DRIVER", "software", 1) != 0) return 2;
     if (SDL_Init(SDL_INIT_TIMER) != 0) return 2;
@@ -710,11 +722,17 @@ int main(int argc, char **argv)
         return 2;
     }
 
-    char *streamer_argv[] = {
-        (char *)"hcc2d_streamer",
-        argv[1], NULL
-    };
-    return hcc2d_streamer_cli_main(2, streamer_argv);
+    char *streamer_argv[5] = {(char *)"hcc2d_streamer", NULL, NULL, NULL, NULL};
+    int streamer_argc = 2;
+    if (argc == 3) {
+        streamer_argv[1] = (char *)"--fps";
+        streamer_argv[2] = argv[2];
+        streamer_argv[3] = argv[1];
+        streamer_argc = 4;
+    } else {
+        streamer_argv[1] = argv[1];
+    }
+    return hcc2d_streamer_cli_main(streamer_argc, streamer_argv);
 }
 EOF
 
@@ -763,6 +781,10 @@ if compgen -G "${TEST_DIR}/main.gif.tmp.*" >/dev/null; then
 fi
 grep -Fqx 'Warning: open the GIF full-screen, ideally at 100% or an integer zoom, and disable smooth image scaling.' \
     "${TEST_DIR}/gif-main.err"
+grep -q 'Warning: 12 symbols per second may produce rapidly changing or flashing visual patterns.' \
+    "${TEST_DIR}/gif-main.err"
+grep -q 'use --fps 3 to reduce the rate; this does not guarantee medical safety.' \
+    "${TEST_DIR}/gif-main.err"
 
 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
 UBSAN_OPTIONS=halt_on_error=1 \
@@ -770,7 +792,19 @@ UBSAN_OPTIONS=halt_on_error=1 \
     >"${TEST_DIR}/main.out" 2>"${TEST_DIR}/main.err"
 grep -q 'Symbol: hcc2d8, EC M, version 33, display fps: 12' "${TEST_DIR}/main.out"
 grep -q 'Ready. Streaming at 12 fps.' "${TEST_DIR}/main.out"
-test ! -s "${TEST_DIR}/main.err"
+grep -q 'Warning: 12 symbols per second may produce rapidly changing or flashing visual patterns.' \
+    "${TEST_DIR}/main.err"
+grep -q 'use --fps 3 to reduce the rate; this does not guarantee medical safety.' \
+    "${TEST_DIR}/main.err"
+
+ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+UBSAN_OPTIONS=halt_on_error=1 \
+    "${MAIN_HARNESS}" "${TEST_DIR}/input.txt" 3 \
+    >"${TEST_DIR}/main-3fps.out" 2>"${TEST_DIR}/main-3fps.err"
+grep -q 'Symbol: hcc2d8, EC M, version 33, display fps: 3' \
+    "${TEST_DIR}/main-3fps.out"
+grep -q 'Ready. Streaming at 3 fps.' "${TEST_DIR}/main-3fps.out"
+test ! -s "${TEST_DIR}/main-3fps.err"
 
 truncate -s 2097152 "${TEST_DIR}/max-size.bin"
 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
@@ -780,7 +814,10 @@ UBSAN_OPTIONS=halt_on_error=1 \
 grep -q 'Symbol: hcc2d8, EC M, version 33, display fps: 12' \
     "${TEST_DIR}/max-size.out"
 grep -q 'Ready. Streaming at 12 fps.' "${TEST_DIR}/max-size.out"
-test ! -s "${TEST_DIR}/max-size.err"
+grep -q 'Warning: 12 symbols per second may produce rapidly changing or flashing visual patterns.' \
+    "${TEST_DIR}/max-size.err"
+grep -q 'use --fps 3 to reduce the rate; this does not guarantee medical safety.' \
+    "${TEST_DIR}/max-size.err"
 
-printf 'PASS: build=1 help=1 invalid_inputs=24 supported_fps=4 boundary_encodes=480 protocol=1 option_model=1 parity_ratio=1 palette=1 filenames=1 erasure_subsets=35 gif_lzw=1 gif_lzw_reset=1 gif_atomic=1 gif_main=1 main=1 max_input=1 sanitizer=%s\n' \
+printf 'PASS: build=1 help=1 invalid_inputs=24 supported_fps=5 boundary_encodes=480 protocol=1 option_model=1 parity_ratio=1 palette=1 filenames=1 erasure_subsets=35 gif_lzw=1 gif_lzw_reset=1 gif_atomic=1 gif_main=2 max_input=1 sanitizer=%s\n' \
     "${SANITIZE:-0}"

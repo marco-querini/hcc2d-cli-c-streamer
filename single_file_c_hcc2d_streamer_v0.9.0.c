@@ -33,6 +33,11 @@
  *     Android (Google Play):       https://play.google.com/store/apps/details?id=com.hcc2d.decoder
  *     Android (Huawei AppGallery): https://appgallery.cloud.huawei.com/marketshare/app/C117478101
  *
+ * Terms and safety information:
+ *   See TERMS.md or https://hcc2d.com/en/terms for visual-streaming safety
+ *   information. Those Terms do not replace or restrict the rights granted
+ *   for this open-source CLI by the Apache License 2.0.
+ *
  * Warranty disclaimer:
  *   This file is provided "as is", without warranties or conditions of any
  *   kind, express or implied, including but not limited to merchantability,
@@ -2023,10 +2028,13 @@ static void print_usage(const char *prog) {
 "  --version N              symbol version 1-40; higher versions carry more\n"
 "                           data per symbol but render smaller modules.\n"
 "                           (default: 33)\n"
-"  --fps N                  display or exported GIF frame rate: 10, 12, 15,\n"
-"                           or 20 symbols per second; each divides evenly\n"
+"  --fps N                  display or exported GIF frame rate: 3, 10, 12,\n"
+"                           15, or 20 symbols per second; each divides evenly\n"
 "                           into a commonly used 60 Hz refresh rate\n"
-"                           (default: 12)\n"
+"                           (default: 12). If sensitive to flashing, avoid\n"
+"                           visual streaming; if proceeding, use --fps 3 to\n"
+"                           reduce visual changes. This does not guarantee\n"
+"                           medical safety.\n"
 "  --export-gif FILE        export one complete, infinitely looping GIF89a\n"
 "                           sequence and exit without opening an SDL window.\n"
 "  --gif-side N             GIF canvas width and height in pixels, from 1\n"
@@ -2126,11 +2134,11 @@ int main(int argc, char **argv) {
                     return 1;
                 break;
             case 'f':
-                if (parse_int_option("fps", optarg, 10, 20, &display_fps) != 0)
+                if (parse_int_option("fps", optarg, 3, 20, &display_fps) != 0)
                     return 1;
-                if (display_fps != 10 && display_fps != 12 &&
+                if (display_fps != 3 && display_fps != 10 && display_fps != 12 &&
                     display_fps != 15 && display_fps != 20) {
-                    fprintf(stderr, "Error: --fps must be 10, 12, 15, or 20\n");
+                    fprintf(stderr, "Error: --fps must be 3, 10, 12, 15, or 20\n");
                     return 1;
                 }
                 break;
@@ -2462,6 +2470,15 @@ int main(int argc, char **argv) {
            enc_mode, ec_level, version, display_fps, g_shard_data_bytes);
     printf("Reed-Solomon groups: %u, total symbols: %u\n",
            n_groups, n_symbols_total);
+    if (display_fps > 3) {
+        fprintf(stderr,
+                "Warning: %d symbols per second may produce rapidly changing "
+                "or flashing visual patterns.\n"
+                "If you are sensitive to such effects, avoid visual streaming. "
+                "If you proceed, use --fps 3 to reduce the rate; this does not "
+                "guarantee medical safety.\n",
+                display_fps);
+    }
     for (uint32_t g = 0; g < n_groups && g < 4; g++)
         printf("  group %u: data=%u, parity=%u, total=%u\n",
                g + 1u, groups[g].k, groups[g].m, groups[g].n);

@@ -3,6 +3,8 @@
 ## 0.9.0
 
 - Published the standalone single-file C HCC2D Streamer.
+- Added a console warning for rates above 3 symbols per second and aligned the
+  built-in help, README, manual page, tests, and English Terms reference.
 - Added standard QR, HCC2D4, and HCC2D8 symbol streams.
 - Added HCC2D symbol versions 1--40 and EC levels L, M, Q, and H.
 - Set the default streaming profile to HCC2D8 version 33, EC level M, at
@@ -13,8 +15,8 @@
 - Split transfers into dynamic Cauchy Reed-Solomon erasure groups.
 - Exposed transfer redundancy through a single `--parity-ratio` option.
 - Set default parity to 70% of the data-shard count.
-- Limited display rates to 10, 12, 15, and 20 symbols per second for regular
-  cadence on commonly used 60 Hz displays.
+- Supported display rates of 3, 10, 12, 15, and 20 symbols per second for
+  regular cadence on commonly used 60 Hz displays.
 - Streamed symbols from memory through SDL2 without temporary image files.
 - Added lossless animated GIF89a export with LZW compression, complete
   infinitely looping sequences, requested frame timing, and integer-only module

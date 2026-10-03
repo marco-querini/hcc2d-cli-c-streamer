@@ -2,6 +2,9 @@
 set -eu
 
 hcc2d_streamer --help | grep -F -- '--export-gif FILE' >/dev/null
+hcc2d_streamer --help | grep -F -- 'frame rate: 3, 10, 12,' >/dev/null
+hcc2d_streamer --help | grep -F -- 'if proceeding, use --fps 3 to' >/dev/null
+hcc2d_streamer --fps 3 /dev/null 2>&1 | grep -F -- 'input file is empty' >/dev/null
 
 if hcc2d_streamer --mode hcc2d16 --version 40 /dev/null >/dev/null 2>&1; then
     echo "Experimental HCC2D16 unexpectedly succeeded" >&2

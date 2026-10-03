@@ -17,6 +17,7 @@ CHECKSUM_FILES := \
 	.gitignore \
 	CHANGELOG.md \
 	LICENSE \
+	TERMS.md \
 	Makefile \
 	README.md \
 	apt-repo/README.md \

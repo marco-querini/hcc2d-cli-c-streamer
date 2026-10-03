@@ -27,6 +27,7 @@ HCC2DST v2 streams require HCC2D Decoder version 1.2.4 or later.
 - `single_file_c_hcc2d_streamer_v0.9.0.c`
 - `test_single_file_streamer.sh`
 - `LICENSE`
+- `TERMS.md`
 - `CHANGELOG.md`
 - `Makefile`
 - `SHA256SUMS.txt`
@@ -204,15 +205,15 @@ black margins outside the symbol's own quiet zone. Modules therefore remain
 square, sharp, and equal-sized without interpolation or deformation.
 
 GIF frame delays use centiseconds. Rates of 10 and 20 fps are exact per frame;
-12 and 15 fps use alternating delays that approximate the requested rate as
-closely as the format's centisecond timing permits.
+3, 12, and 15 fps use alternating delays that approximate the requested rate
+as closely as the format's centisecond timing permits.
 > **Warning:** Open the exported GIF full-screen, ideally at 100% or an integer
 > zoom, and disable smooth image scaling. A viewer that resizes the animation
 > with interpolation can blur module edges and reduce decoding reliability.
 
-Playback timing ultimately depends on the GIF viewer; 10 fps is the conservative
-choice. A slower viewer only extends transfer time, while dropped frames can
-normally be recovered on a later loop through the Reed-Solomon parity.
+Playback timing ultimately depends on the GIF viewer. A slower viewer only
+extends transfer time, while dropped frames can normally be recovered on a
+later loop through the Reed-Solomon parity.
 
 ## Main options
 
@@ -221,7 +222,7 @@ normally be recovered on a later loop through the Reed-Solomon parity.
 | `--mode` | `qr`, `hcc2d4`, `hcc2d8` | `hcc2d8` | Symbol family |
 | `--ec-level` | `L`, `M`, `Q`, `H` | `M` | Error correction inside each symbol |
 | `--version` | `1..40` | `33` | Fixed symbol version |
-| `--fps` | `10`, `12`, `15`, `20` | `12` | Displayed or exported symbols per second |
+| `--fps` | `3`, `10`, `12`, `15`, `20` | `12` | Displayed or exported symbols per second; use `3` to reduce visual changes |
 | `--export-gif` | output path | off | Export one complete looping GIF and exit |
 | `--gif-side` | `1..8192` | `1080` | Square GIF canvas side; requires `--export-gif` |
 | `--display` | non-negative integer | `0` | SDL display used for window placement |
@@ -230,8 +231,14 @@ normally be recovered on a later loop through the Reed-Solomon parity.
 | `--palette-rgb` | RGB list | built in | Complete HCC2D4/8 palette |
 
 The available display rates divide a commonly used 60 Hz refresh rate into
-an integer number of refresh cycles per symbol: 6, 5, 4, or 3 cycles at 10,
-12, 15, or 20 symbols per second, respectively.
+an integer number of refresh cycles per symbol: 20, 6, 5, 4, or 3 cycles at 3,
+10, 12, 15, or 20 symbols per second, respectively.
+
+Rates above 3 symbols per second may produce rapidly changing or flashing
+visual patterns, so the CLI prints a warning when such a rate is selected.
+People who are sensitive to these effects should avoid visual streaming. If
+they proceed, `--fps 3` reduces the frequency of visual changes but does not
+guarantee medical safety.
 
 The shard payload size is derived automatically from the selected symbol
 family, EC level, and version. It is the largest payload that fits exactly in
@@ -264,6 +271,9 @@ does not upload the selected file.
 
 Anyone able to see and decode enough displayed symbols may reconstruct the
 file.
+
+See [`TERMS.md`](TERMS.md) for the English Terms reference and the complete
+photosensitivity and visual-streaming safety information.
 
 ## License
 

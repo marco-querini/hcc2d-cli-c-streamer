@@ -34,9 +34,11 @@ Set the error-correction level inside each symbol. The default is \fBM\fR.
 Set the fixed symbol version from 1 to 40. The default is 33.
 .TP
 \fB\-\-fps\fR \fIN\fR
-Set the SDL display or exported GIF rate to 10, 12, 15, or 20 symbols per
+Set the SDL display or exported GIF rate to 3, 10, 12, 15, or 20 symbols per
 second. The default is 12. On a 60 Hz display, these rates show each symbol for
-exactly 6, 5, 4, or 3 refresh cycles, respectively.
+exactly 20, 6, 5, 4, or 3 refresh cycles, respectively. Users sensitive to
+flashing should avoid visual streaming. If they proceed, \fB\-\-fps 3\fR reduces
+visual changes but does not guarantee medical safety.
 .TP
 \fB\-\-export-gif\fR \fIFILE\fR
 Export one complete interleaved sequence as a lossless GIF89a animation, set it
