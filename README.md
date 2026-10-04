@@ -237,7 +237,7 @@ Rates above 3 symbols per second may produce rapidly changing or flashing
 visual patterns, so the CLI prints a warning when such a rate is selected.
 People who are sensitive to these effects should avoid visual streaming. If
 they proceed, `--fps 3` reduces the frequency of visual changes but does not
-guarantee medical safety.
+eliminate the risk of discomfort or adverse reactions.
 
 The shard payload size is derived automatically from the selected symbol
 family, EC level, and version. It is the largest payload that fits exactly in

@@ -27,7 +27,7 @@ fi
 
 grep -q 'Photosensitivity warning:' "${SOURCE}"
 grep -q 'Visual streaming may produce rapidly changing or flashing patterns.' "${SOURCE}"
-grep -q 'not guarantee medical safety.' "${SOURCE}"
+grep -q 'not eliminate the risk of discomfort or adverse reactions.' "${SOURCE}"
 
 SDL_CFLAGS_TEXT="$(pkg-config --cflags sdl2)"
 SDL_LIBS_TEXT="$(pkg-config --libs sdl2)"
@@ -59,7 +59,7 @@ grep -q -- '--export-gif FILE' <<<"${HELP}"
 grep -q -- '--gif-side N' <<<"${HELP}"
 grep -q 'frame rate: 3, 10, 12,' <<<"${HELP}"
 grep -q -- 'if proceeding, use --fps 3 to' <<<"${HELP}"
-grep -q -- 'reduce visual changes. This does not guarantee' <<<"${HELP}"
+grep -q -- 'reduce visual changes. This does not eliminate' <<<"${HELP}"
 grep -q '2 MiB (2,097,152 bytes)' <<<"${HELP}"
 grep -q 'HCC2DST v2 output' <<<"${HELP}"
 grep -q 'HCC2D Decoder version 1.2.4 or later' <<<"${HELP}"
@@ -781,7 +781,7 @@ grep -Fqx 'Warning: open the GIF full-screen, ideally at 100% or an integer zoom
     "${TEST_DIR}/gif-main.err"
 grep -q 'Warning: 12 symbols per second may produce rapidly changing or flashing visual patterns.' \
     "${TEST_DIR}/gif-main.err"
-grep -q 'use --fps 3 to reduce the rate; this does not guarantee medical safety.' \
+grep -q 'use --fps 3 to reduce the rate; this does not eliminate the risk of discomfort or adverse reactions.' \
     "${TEST_DIR}/gif-main.err"
 
 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
@@ -792,7 +792,7 @@ grep -q 'Symbol: hcc2d8, EC M, version 33, display fps: 12' "${TEST_DIR}/main.ou
 grep -q 'Ready. Streaming at 12 fps.' "${TEST_DIR}/main.out"
 grep -q 'Warning: 12 symbols per second may produce rapidly changing or flashing visual patterns.' \
     "${TEST_DIR}/main.err"
-grep -q 'use --fps 3 to reduce the rate; this does not guarantee medical safety.' \
+grep -q 'use --fps 3 to reduce the rate; this does not eliminate the risk of discomfort or adverse reactions.' \
     "${TEST_DIR}/main.err"
 
 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
@@ -814,7 +814,7 @@ grep -q 'Symbol: hcc2d8, EC M, version 33, display fps: 12' \
 grep -q 'Ready. Streaming at 12 fps.' "${TEST_DIR}/max-size.out"
 grep -q 'Warning: 12 symbols per second may produce rapidly changing or flashing visual patterns.' \
     "${TEST_DIR}/max-size.err"
-grep -q 'use --fps 3 to reduce the rate; this does not guarantee medical safety.' \
+grep -q 'use --fps 3 to reduce the rate; this does not eliminate the risk of discomfort or adverse reactions.' \
     "${TEST_DIR}/max-size.err"
 
 printf 'PASS: build=1 help=1 invalid_inputs=24 supported_fps=5 boundary_encodes=480 protocol=1 option_model=1 parity_ratio=1 palette=1 filenames=1 erasure_subsets=35 gif_lzw=1 gif_lzw_reset=1 gif_atomic=1 gif_main=2 max_input=1 sanitizer=%s\n' \
