@@ -206,6 +206,7 @@ square, sharp, and equal-sized without interpolation or deformation.
 GIF frame delays use centiseconds. Rates of 10 and 20 fps are exact per frame;
 3, 12, and 15 fps use alternating delays that approximate the requested rate
 as closely as the format's centisecond timing permits.
+
 > **Warning:** Open the exported GIF full-screen, ideally at 100% or an integer
 > zoom, and disable smooth image scaling. A viewer that resizes the animation
 > with interpolation can blur module edges and reduce decoding reliability.
@@ -221,7 +222,7 @@ later loop through the Reed-Solomon parity.
 | `--mode` | `qr`, `hcc2d4`, `hcc2d8` | `hcc2d8` | Symbol family |
 | `--ec-level` | `L`, `M`, `Q`, `H` | `M` | Error correction inside each symbol |
 | `--version` | `1..40` | `33` | Fixed symbol version |
-| `--fps` | `3`, `10`, `12`, `15`, `20` | `12` | Displayed or exported symbols per second; `3` reduces the frequency of visual changes and potential flashing, but lowers throughput and increases transfer time |
+| `--fps` | `3`, `10`, `12`, `15`, `20` | `12` | Symbol rate for display or GIF export; see the safety note below |
 | `--export-gif` | output path | off | Export one complete looping GIF and exit |
 | `--gif-side` | `1..8192` | `1080` | Square GIF canvas side; requires `--export-gif` |
 | `--display` | non-negative integer | `0` | SDL display used for window placement |
@@ -229,16 +230,18 @@ later loop through the Reed-Solomon parity.
 | `--no-titlebar` | flag | off | Hide window decorations |
 | `--palette-rgb` | RGB list | built in | Complete HCC2D4/8 palette |
 
+### Visual-streaming safety
+
 The available display rates divide a commonly used 60 Hz refresh rate into
 an integer number of refresh cycles per symbol: 20, 6, 5, 4, or 3 cycles at 3,
 10, 12, 15, or 20 symbols per second, respectively.
 
 Rates above 3 symbols per second may produce rapidly changing or flashing
 visual patterns, so the CLI prints a warning when such a rate is selected.
-People who are sensitive to these effects should avoid visual streaming. If
-they proceed, `--fps 3` reduces the frequency of visual changes and potential
-flashing. It also lowers throughput and increases transfer time, and does not
-eliminate the risk of discomfort or adverse reactions.
+People who are sensitive to these effects should avoid visual streaming. The
+`--fps 3` setting reduces the frequency of visual changes and potential
+flashing, but it also lowers throughput and increases transfer time. It does
+not eliminate the risk of discomfort or adverse reactions.
 
 The shard payload size is derived automatically from the selected symbol
 family, EC level, and version. It is the largest payload that fits exactly in
@@ -281,4 +284,8 @@ the source header for the applicable terms.
 
 ## Notice
 
-The views expressed in connection with the HCC2D Code Specification, HCC2D applications distributed through app stores, and HCC2D source code released as open source are solely those of the author and do not necessarily reflect the official position of any institution, organization, or employer with which the author is or has been affiliated.
+The views expressed in connection with the HCC2D Code Specification, HCC2D
+applications distributed through app stores, and HCC2D source code released as
+open source are solely those of the author and do not necessarily reflect the
+official position of any institution, organization, or employer with which the
+author is or has been affiliated.
