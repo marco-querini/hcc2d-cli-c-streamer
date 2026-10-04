@@ -221,7 +221,7 @@ later loop through the Reed-Solomon parity.
 | `--mode` | `qr`, `hcc2d4`, `hcc2d8` | `hcc2d8` | Symbol family |
 | `--ec-level` | `L`, `M`, `Q`, `H` | `M` | Error correction inside each symbol |
 | `--version` | `1..40` | `33` | Fixed symbol version |
-| `--fps` | `3`, `10`, `12`, `15`, `20` | `12` | Displayed or exported symbols per second; use `3` to reduce visual changes |
+| `--fps` | `3`, `10`, `12`, `15`, `20` | `12` | Displayed or exported symbols per second; `3` reduces the frequency of visual changes and potential flashing, but lowers throughput and increases transfer time |
 | `--export-gif` | output path | off | Export one complete looping GIF and exit |
 | `--gif-side` | `1..8192` | `1080` | Square GIF canvas side; requires `--export-gif` |
 | `--display` | non-negative integer | `0` | SDL display used for window placement |
