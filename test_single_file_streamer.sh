@@ -54,6 +54,7 @@ run_streamer() {
 
 HELP="$(run_streamer --help)"
 grep -q 'Version 0.9.0' <<<"${HELP}"
+grep -q 'Zenodo record: https://doi.org/10.5281/zenodo.22206528' <<<"${HELP}"
 grep -q -- '--mode {qr,hcc2d4,hcc2d8}' <<<"${HELP}"
 grep -q -- '--max-data-shards N' <<<"${HELP}"
 grep -q -- '--parity-ratio R' <<<"${HELP}"

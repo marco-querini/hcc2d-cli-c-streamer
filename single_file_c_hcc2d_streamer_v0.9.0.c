@@ -16,6 +16,7 @@
  * Specification compliance:
  *   Intended to conform to the HCC2D Code Specification version 0.9.0.
  *   Reference specification PDF: https://hcc2d.com/hcc2d_specification_v0.9.0.pdf
+ *   Zenodo record: https://doi.org/10.5281/zenodo.22206528
  *
  * Description:
  *   Reads a file, splits it into Reed-Solomon shards with dynamic k/m groups,
@@ -2003,7 +2004,8 @@ static void print_usage(const char *prog) {
 "Copyright Marco Querini  |  SPDX-License-Identifier: Apache-2.0  |  Version 0.9.0\n\n"
 "Specification compliance:\n"
 "  Intended to conform to the HCC2D Code Specification version 0.9.0.\n"
-"  Reference specification PDF: https://hcc2d.com/hcc2d_specification_v0.9.0.pdf\n\n"
+"  Reference specification PDF: https://hcc2d.com/hcc2d_specification_v0.9.0.pdf\n"
+"  Zenodo record: https://doi.org/10.5281/zenodo.22206528\n\n"
 "Description:\n"
 "  Reads <file>, splits it into Reed-Solomon shards with dynamic k/m groups,\n"
 "  encodes each shard as an HCC2D symbol or a standard QR Code (shard size\n"
