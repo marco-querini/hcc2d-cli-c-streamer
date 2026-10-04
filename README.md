@@ -236,7 +236,8 @@ an integer number of refresh cycles per symbol: 20, 6, 5, 4, or 3 cycles at 3,
 Rates above 3 symbols per second may produce rapidly changing or flashing
 visual patterns, so the CLI prints a warning when such a rate is selected.
 People who are sensitive to these effects should avoid visual streaming. If
-they proceed, `--fps 3` reduces the frequency of visual changes but does not
+they proceed, `--fps 3` reduces the frequency of visual changes and potential
+flashing. It also lowers throughput and increases transfer time, and does not
 eliminate the risk of discomfort or adverse reactions.
 
 The shard payload size is derived automatically from the selected symbol

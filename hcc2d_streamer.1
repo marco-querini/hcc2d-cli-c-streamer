@@ -38,7 +38,9 @@ Set the SDL display or exported GIF rate to 3, 10, 12, 15, or 20 symbols per
 second. The default is 12. On a 60 Hz display, these rates show each symbol for
 exactly 20, 6, 5, 4, or 3 refresh cycles, respectively. Users sensitive to
 flashing should avoid visual streaming. If they proceed, \fB\-\-fps 3\fR reduces
-visual changes but does not eliminate the risk of discomfort or adverse reactions.
+the frequency of visual changes and potential flashing. It also lowers
+throughput and increases transfer time, and does not eliminate the risk of
+discomfort or adverse reactions.
 .TP
 \fB\-\-export-gif\fR \fIFILE\fR
 Export one complete interleaved sequence as a lossless GIF89a animation, set it

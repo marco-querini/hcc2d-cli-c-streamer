@@ -36,8 +36,9 @@
  * Photosensitivity warning:
  *   Visual streaming may produce rapidly changing or flashing patterns.
  *   People who are sensitive to these effects should avoid visual streaming.
- *   If they proceed, --fps 3 reduces the frequency of visual changes but does
- *   not eliminate the risk of discomfort or adverse reactions.
+ *   If they proceed, --fps 3 reduces the frequency of visual changes and
+ *   potential flashing; it also lowers throughput and increases transfer time.
+ *   It does not eliminate the risk of discomfort or adverse reactions.
  *
  * Warranty disclaimer:
  *   This file is provided "as is", without warranties or conditions of any
@@ -2034,7 +2035,9 @@ static void print_usage(const char *prog) {
 "                           into a commonly used 60 Hz refresh rate\n"
 "                           (default: 12). If sensitive to flashing, avoid\n"
 "                           visual streaming; if proceeding, use --fps 3 to\n"
-"                           reduce visual changes. This does not eliminate\n"
+"                           reduce the frequency of visual changes and\n"
+"                           potential flashing. This also lowers throughput\n"
+"                           and increases transfer time, and does not eliminate\n"
 "                           the risk of discomfort or adverse reactions.\n"
 "  --export-gif FILE        export one complete, infinitely looping GIF89a\n"
 "                           sequence and exit without opening an SDL window.\n"
@@ -2476,8 +2479,10 @@ int main(int argc, char **argv) {
                 "Warning: %d symbols per second may produce rapidly changing "
                 "or flashing visual patterns.\n"
                 "If you are sensitive to such effects, avoid visual streaming. "
-                "If you proceed, use --fps 3 to reduce the rate; this does not "
-                "eliminate the risk of discomfort or adverse reactions.\n",
+                "If you proceed, use --fps 3 to reduce the frequency of visual "
+                "changes and potential flashing. This also lowers throughput "
+                "and increases transfer time, and does not eliminate the risk "
+                "of discomfort or adverse reactions.\n",
                 display_fps);
     }
     for (uint32_t g = 0; g < n_groups && g < 4; g++)
