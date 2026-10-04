@@ -27,7 +27,6 @@ HCC2DST v2 streams require HCC2D Decoder version 1.2.4 or later.
 - `single_file_c_hcc2d_streamer_v0.9.0.c`
 - `test_single_file_streamer.sh`
 - `LICENSE`
-- `TERMS.md`
 - `CHANGELOG.md`
 - `Makefile`
 - `SHA256SUMS.txt`
@@ -271,9 +270,6 @@ does not upload the selected file.
 
 Anyone able to see and decode enough displayed symbols may reconstruct the
 file.
-
-See [`TERMS.md`](TERMS.md) for the English Terms reference and the complete
-photosensitivity and visual-streaming safety information.
 
 ## License
 

@@ -33,10 +33,11 @@
  *     Android (Google Play):       https://play.google.com/store/apps/details?id=com.hcc2d.decoder
  *     Android (Huawei AppGallery): https://appgallery.cloud.huawei.com/marketshare/app/C117478101
  *
- * Terms and safety information:
- *   See TERMS.md or https://hcc2d.com/en/terms for visual-streaming safety
- *   information. Those Terms do not replace or restrict the rights granted
- *   for this open-source CLI by the Apache License 2.0.
+ * Photosensitivity warning:
+ *   Visual streaming may produce rapidly changing or flashing patterns.
+ *   People who are sensitive to these effects should avoid visual streaming.
+ *   If they proceed, --fps 3 reduces the frequency of visual changes but does
+ *   not guarantee medical safety.
  *
  * Warranty disclaimer:
  *   This file is provided "as is", without warranties or conditions of any

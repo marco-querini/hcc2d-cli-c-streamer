@@ -25,11 +25,9 @@ if [[ ! -f "${SOURCE}" ]]; then
     exit 1
 fi
 
-grep -q 'HCC2D Streamer CLI is a separate open-source project' "${ROOT_DIR}/TERMS.md"
-grep -q 'governed by the \[Apache License 2.0\]' "${ROOT_DIR}/TERMS.md"
-grep -q '## 6. Photosensitivity and Visual Streaming' "${ROOT_DIR}/TERMS.md"
-grep -q 'Users with known or suspected photosensitivity should avoid' "${ROOT_DIR}/TERMS.md"
-grep -q 'See TERMS.md or https://hcc2d.com/en/terms' "${SOURCE}"
+grep -q 'Photosensitivity warning:' "${SOURCE}"
+grep -q 'Visual streaming may produce rapidly changing or flashing patterns.' "${SOURCE}"
+grep -q 'not guarantee medical safety.' "${SOURCE}"
 
 SDL_CFLAGS_TEXT="$(pkg-config --cflags sdl2)"
 SDL_LIBS_TEXT="$(pkg-config --libs sdl2)"

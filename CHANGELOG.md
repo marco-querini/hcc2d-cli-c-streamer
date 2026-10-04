@@ -4,7 +4,7 @@
 
 - Published the standalone single-file C HCC2D Streamer.
 - Added a console warning for rates above 3 symbols per second and aligned the
-  built-in help, README, manual page, tests, and English Terms reference.
+  built-in help, README, manual page, and tests.
 - Added standard QR, HCC2D4, and HCC2D8 symbol streams.
 - Added HCC2D symbol versions 1--40 and EC levels L, M, Q, and H.
 - Set the default streaming profile to HCC2D8 version 33, EC level M, at
